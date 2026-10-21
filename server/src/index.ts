@@ -3,7 +3,6 @@ import path from "node:path";
 import express, { type ErrorRequestHandler, type Request, type Response } from "express";
 import { ZodError } from "zod";
 import { DATA_DIR, IS_PRODUCTION, PORT, SCREENSHOTS_DIR, WEB_DIST_DIR, ensureDirs } from "./config.js";
-import { initDb } from "./db.js";
 import { HttpError, zodIssueSummary } from "./http.js";
 import { errorMessage, logger } from "./log.js";
 import { router as settingsRouter } from "./routes/settings.js";
@@ -15,7 +14,6 @@ import { router as assistRouter } from "./routes/assist.js";
 import { router as logsRouter } from "./routes/logs.js";
 
 ensureDirs();
-initDb();
 
 export const app = express();
 app.disable("x-powered-by");
@@ -86,7 +84,7 @@ const errorHandler: ErrorRequestHandler = (err: unknown, _req, res, _next) => {
 };
 app.use(errorHandler);
 
-app.listen(PORT, () => {
+app.listen(PORT, "127.0.0.1", () => {
   logger.info(`ApplyPilot server listening on http://localhost:${PORT}`, {
     production: IS_PRODUCTION,
     webDist: webDistExists,

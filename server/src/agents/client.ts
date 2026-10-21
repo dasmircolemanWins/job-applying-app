@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import Anthropic, { type APIError } from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type { z } from "zod";
 import { isMockActive, readEffort, readModel, resolveApiKey } from "../config.js";
@@ -85,7 +85,7 @@ function logRun(entry: RunLog): void {
 }
 
 /** Seconds from a `retry-after` header on an SDK error, if present and sane. */
-function retryAfterMs(err: Anthropic.APIError): number {
+function retryAfterMs(err: APIError): number {
   const headers: unknown = err.headers;
   let raw: string | null | undefined;
   if (headers instanceof Headers) raw = headers.get("retry-after");
@@ -98,16 +98,6 @@ function retryAfterMs(err: Anthropic.APIError): number {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-function describeRefusal(message: Anthropic.Message): string {
-  const details: unknown = message.stop_details;
-  if (details && typeof details === "object") {
-    const d = details as { category?: string | null; explanation?: string | null };
-    const parts = [d.category ? `category: ${d.category}` : null, d.explanation ?? null].filter(Boolean);
-    if (parts.length) return parts.join(" — ");
-  }
-  return "no explanation provided";
-}
 
 /**
  * Run one agent call and return the schema-typed result (SPEC §5).
@@ -155,7 +145,7 @@ export async function runAgent<T>(name: string, opts: RunAgentOptions<T>): Promi
       max_tokens: MAX_TOKENS,
       system: [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: opts.user }],
-      output_config: { effort, format: zodOutputFormat(opts.schema) },
+      output_config: { effort: effort === "xhigh" ? "max" : effort, format: zodOutputFormat(opts.schema) },
     });
 
   let inputTokens = 0;
@@ -176,7 +166,7 @@ export async function runAgent<T>(name: string, opts: RunAgentOptions<T>): Promi
     outputTokens = response.usage.output_tokens;
 
     if (response.stop_reason === "refusal") {
-      throw new AgentError("refusal", name, `${name}: the model declined this request (${describeRefusal(response)})`);
+      throw new AgentError("refusal", name, `${name}: the model declined this request`);
     }
     if (response.stop_reason === "max_tokens") {
       throw new AgentError("api", name, `${name}: output exceeded ${MAX_TOKENS} tokens; reduce the input`);

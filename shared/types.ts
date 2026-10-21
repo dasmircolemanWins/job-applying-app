@@ -180,7 +180,7 @@ export interface StandingFacts {
   workAuthorization: string;
   /** Verbatim answer to the sponsorship question. */
   sponsorshipAnswer: string;
-  requiresSponsorship: boolean;
+  requiresSponsorship: boolean | null;
   targetTitles: string[];
   locationMode: LocationMode;
   /** Regions/states/countries the user will work in (when not fully remote). */
@@ -826,18 +826,18 @@ export const DEFAULT_STANDING_FACTS: StandingFacts = {
   email: "",
   phone: "",
   address: "",
-  timeZone: "America/New_York",
-  workAuthorization: "Yes, I am authorized to work in the United States for any employer.",
-  sponsorshipAnswer: "No, I will not now or in the future require sponsorship.",
-  requiresSponsorship: false,
+  timeZone: "",
+  workAuthorization: "",
+  sponsorshipAnswer: "",
+  requiresSponsorship: null,
   targetTitles: [],
-  locationMode: "remote",
+  locationMode: "any",
   regions: [],
   payFloor: null,
   desiredPay: null,
   payCurrency: "USD",
-  soonestStart: "Two weeks from offer acceptance.",
-  howDidYouHear: "Job board / online search.",
+  soonestStart: "",
+  howDidYouHear: "",
   linkedinUrl: "",
   portfolioUrl: "",
   eeo: {
@@ -847,10 +847,10 @@ export const DEFAULT_STANDING_FACTS: StandingFacts = {
     disabilityStatus: "I do not want to answer",
   },
   screeners: {
-    accommodations: "No accommodations needed.",
+    accommodations: "",
     startupExperience: "",
     yearsBySkill: {},
-    smsOk: true,
+    smsOk: false,
   },
   education: [],
   summary: "",
