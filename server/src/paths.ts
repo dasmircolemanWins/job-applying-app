@@ -7,7 +7,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const SERVER_DIR = path.resolve(HERE, "..");
 export const ROOT = path.resolve(SERVER_DIR, "..");
 
-export const DATA_DIR = path.join(ROOT, "data");
+export const DATA_DIR = process.env.APPLYPILOT_DATA_DIR ?? path.join(ROOT, "data");
 export const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
 export const TAILORED_DIR = path.join(DATA_DIR, "tailored");
 export const SCREENSHOTS_DIR = path.join(DATA_DIR, "screenshots");

@@ -216,3 +216,7 @@ input::placeholder, textarea::placeholder { color: #65748b; }
   .topbar-actions { gap: 5px; }
   .daily-line { max-width: 120px; font-size: 8px; }
 }
+@media (max-width: 600px) {
+  .sidebar { height: calc(59px + env(safe-area-inset-bottom)); padding-bottom: max(5px, env(safe-area-inset-bottom)); }
+  .main-area { padding-bottom: calc(59px + env(safe-area-inset-bottom)); }
+}

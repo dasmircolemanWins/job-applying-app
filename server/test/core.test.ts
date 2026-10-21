@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
+import JSZip from "jszip";
 import { DEFAULT_RULES, DEFAULT_STANDING_FACTS, type ResumeDocument } from "../../shared/types.js";
+import { extractDocxText } from "../src/services/resumeParse.js";
 
 const dbPath = path.join(os.tmpdir(), `applypilot-test-${process.pid}-${Date.now()}.db`);
 process.env.APPLYPILOT_DB = dbPath;
@@ -94,6 +96,20 @@ SQL, Python, Salesforce`);
     "SELECT COUNT(*) AS count FROM agent_runs WHERE agent='ResumeAnalyst' AND mock=1",
   ).get()?.count ?? 0);
   assert.equal(currentRuns, previousRuns + 1, "mock ResumeAnalyst should log exactly once");
+});
+
+test("DOCX text extraction reads paragraph, tab, and line-break content", async () => {
+  const archive = new JSZip();
+  archive.file("word/document.xml", `<?xml version="1.0" encoding="UTF-8"?>
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body>
+        <w:p><w:r><w:t>Customer Success</w:t></w:r></w:p>
+        <w:p><w:r><w:t>Skills:</w:t><w:tab/><w:t>Salesforce</w:t><w:br/><w:t>Onboarding</w:t></w:r></w:p>
+      </w:body>
+    </w:document>`);
+
+  const bytes = await archive.generateAsync({ type: "nodebuffer" });
+  assert.equal(await extractDocxText(bytes), "Customer Success\nSkills:\tSalesforce\nOnboarding");
 });
 
 test("mock job parsing extracts an ATS posting ID for duplicate protection", async () => {

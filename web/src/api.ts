@@ -5,11 +5,41 @@ import type {
   Resume, ResumeSummary, ResumeUpdate, RunStatus, ScreeningAnswer, Settings, SettingsUpdate, StandingFacts,
   Rules, Story, StoryUpdate, TestKeyResult, WeeklyReport,
 } from "../../shared/types";
+import { getAccessToken } from "./auth";
 
-const API_ROOT = "/api";
+function apiRoot(): string {
+  const configuredBase = import.meta.env.VITE_API_BASE_URL?.trim();
+  if (!configuredBase) return "/api";
+
+  let url: URL;
+  try {
+    url = new URL(configuredBase);
+  } catch {
+    throw new Error("VITE_API_BASE_URL must be an absolute HTTP(S) URL.");
+  }
+  const localHttp = import.meta.env.DEV &&
+    url.protocol === "http:" &&
+    (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+  if (
+    (url.protocol !== "https:" && !localHttp) ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("VITE_API_BASE_URL must use HTTPS (HTTP is allowed only for local development).");
+  }
+  const basePath = url.pathname.replace(/\/+$/, "");
+  if (basePath.endsWith("/api")) return `${url.origin}${basePath}`;
+  return `${url.origin}${basePath}/api`;
+}
+
+const API_ROOT = apiRoot();
 
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
+  const accessToken = await getAccessToken();
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
   if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
@@ -108,7 +138,10 @@ export const api = {
 };
 
 export async function download(path: string, filename: string): Promise<void> {
-  const response = await fetch(`${API_ROOT}${path}`);
+  const headers = new Headers();
+  const accessToken = await getAccessToken();
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  const response = await fetch(`${API_ROOT}${path}`, { headers });
   if (!response.ok) throw new Error(`Download failed (${response.status})`);
   const url = URL.createObjectURL(await response.blob());
   const anchor = document.createElement("a");

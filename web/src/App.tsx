@@ -12,6 +12,7 @@ import type {
   StandingFacts, Story,
 } from "../../shared/types";
 import { api, downloadKitDocx, downloadKitPdf } from "./api";
+import HostedAuth from "./HostedAuth";
 
 type ToastMessage = { id: number; message: string; kind: "success" | "error" | "info" };
 const NAV = [
@@ -24,6 +25,10 @@ const NAV = [
 ];
 
 export default function App() {
+  return import.meta.env.PROD ? <HostedAuth /> : <WorkspaceApp />;
+}
+
+function WorkspaceApp() {
   const location = useLocation();
   const [report, setReport] = useState<{ line: string } | null>(null);
   const [mock, setMock] = useState(false);

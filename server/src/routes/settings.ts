@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { Router } from "express";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
-import { apiKeySource, isMockActive, maskApiKey, readSetting, readSettingOrDefault, resolveApiKey, writeSetting } from "../config.js";
+import { apiKeySource, isMockActive, IS_PRODUCTION, maskApiKey, readSetting, readSettingOrDefault, resolveApiKey, writeSetting } from "../config.js";
 import { asyncHandler, validate } from "../http.js";
 import { DATA_DIR } from "../paths.js";
 import { chromium } from "playwright";
@@ -43,7 +43,7 @@ function settings() {
     dailyTarget: Number(readSettingOrDefault("daily_target")) || 70,
     mockMode: readSettingOrDefault("mock_mode"),
     mockActive: isMockActive(),
-    dataDir: DATA_DIR,
+    dataDir: IS_PRODUCTION ? "Persistent app storage" : DATA_DIR,
     browserInstalled,
   };
 }

@@ -10,13 +10,14 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.80.0",
+    "@anthropic-ai/sdk": "^1.0.0",
+    "@xmldom/xmldom": "^0.9.12",
     "cheerio": "^1.1.2",
     "docx": "^9.5.1",
     "express": "^5.1.0",
     "imapflow": "^1.0.191",
+    "jszip": "^3.10.2",
     "mailparser": "^3.7.4",
-    "mammoth": "^1.11.0",
     "multer": "^2.0.2",
     "pdf-parse": "^2.1.1",
     "pdfkit": "^0.17.2",
