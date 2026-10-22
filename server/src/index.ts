@@ -26,7 +26,10 @@ app.get("/api/health", (_req, res) => {
 
 if (IS_PRODUCTION) {
   // SQLite is still a shared local store. Do not even load its routes or open its database in production.
-  app.use("/api", createSupabaseAuthMiddleware(), productionDataUnavailable());
+  app.use("/api", createSupabaseAuthMiddleware());
+  const { createAccountRouter } = await import("./routes/account.js");
+  app.use("/api", createAccountRouter());
+  app.use("/api", productionDataUnavailable());
 } else {
   ensureDirs();
   app.use(express.json({ limit: "10mb" }));

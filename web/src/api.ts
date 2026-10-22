@@ -70,6 +70,7 @@ const json = (method: string, value?: unknown): RequestInit => ({
 const idPath = (id: number) => `/${id}`;
 
 export const api = {
+  deleteAccount: () => request<{ deleted: boolean }>("/account", { method: "DELETE" }),
   dashboard: () => request<DashboardData>("/dashboard"),
   report: () => request<DailyReport>("/reports/today"),
   weekly: () => request<WeeklyReport>("/reports/weekly"),
@@ -136,6 +137,9 @@ export const api = {
   emailSweep: (sinceDays = 7) =>
     request<{ emailsScanned: number; urlsFound: number; jobsCreated: Job[]; duplicates: number }>("/email/sweep", json("POST", { sinceDays })),
 };
+
+export const downloadAccountExport = () =>
+  download("/account/export", "applypilot-account-export.zip");
 
 export async function download(path: string, filename: string): Promise<void> {
   const headers = new Headers();

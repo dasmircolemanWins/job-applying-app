@@ -104,13 +104,19 @@ privacy policy, and account-deletion flow are configured and tested.
 `render.yaml` describes one Render web service for the website and API. To
 create it:
 
-1. Create a Supabase project. Turn off public user sign-ups in the Supabase Auth
-   settings; sign-up is intentionally unavailable in this build.
-2. In Render, choose **New + → Blueprint** and connect this GitHub repository.
-3. Enter the Supabase project URL and public anon key when Render requests the
-   four `SUPABASE_*` and `VITE_SUPABASE_*` values. These are named separately
-   because Vite embeds its `VITE_` values during the web build.
-4. After Render assigns a URL, add it as the Supabase Auth site URL and allowed
+1. Create a Supabase project. Turn off public user sign-ups in Supabase Auth;
+   sign-up is intentionally unavailable in this build.
+2. Apply `supabase/migrations/202610210001_hosted_workspace.sql` to the new
+   project's database before deploying. It creates per-user data tables, enables
+   and forces row-level security, and provisions a private `user-files` bucket
+   with user-folder policies. Do not expose the bucket publicly.
+3. In Render, choose **New + → Blueprint** and connect this GitHub repository.
+   Provide the Supabase URL and public anon key for both server and browser
+   variables (`SUPABASE_*` and `VITE_SUPABASE_*`).
+4. Set `SUPABASE_SERVICE_ROLE_KEY` in Render only if account deletion is to be
+   enabled. It is a server-only secret used solely to remove the Auth identity;
+   never set it as a `VITE_` value, in the iOS app, or in source control.
+5. After Render assigns a URL, add it as the Supabase Auth site URL and allowed
    redirect URL.
 
 Use only the Supabase public anon key in the web build. Never put a Supabase
@@ -121,13 +127,22 @@ The provided CORS allowlist includes Capacitor's iOS origins; if you use a
 custom web domain, add that exact HTTPS origin to `CORS_ALLOWED_ORIGINS` in
 Render. Render's free service may sleep when idle.
 
-This is currently a **secure deployment preview, not a usable hosted
-workspace**: Supabase Auth can be configured, but production APIs deliberately
-return `503` because PostgreSQL per-user repositories, private Storage policies,
-and account export/deletion are not implemented. No migration or import of local
-resumes/history occurs. Do not advertise this preview as a functioning
-multi-user app or submit it to the App Store until those release gates are
-complete.
+The migration installs the isolated PostgreSQL schema and private Storage
+policies. The authenticated account export downloads the user's workspace rows
+and private files as a ZIP; account deletion removes that user's private files,
+rows, and Auth identity. These tools depend on the migration being applied,
+valid Supabase configuration, and (for deletion) the server-only service-role
+key. If a prerequisite is missing, the operation fails closed.
+
+**The hosted workspace is still not enabled.** Existing jobs, resumes, profile,
+settings, and application-history routes use synchronous shared SQLite. The
+production server intentionally continues to return `503` for those routes and
+never opens or serves the local `data/` database. The new PostgreSQL schema is
+not yet wired into those feature routes; do not onboard users, advertise this
+deployment as a functioning multi-user workspace, or submit it to the App Store
+until all route/service/file operations use the per-user backend and pass
+isolation tests. Hosted accounts start with fresh data: no local resume or
+history migration/import is provided.
 
 ## Development checks
 

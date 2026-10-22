@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { hostedAuthConfigured, supabase } from "./auth";
+import { api, downloadAccountExport } from "./api";
 import "./hosted-auth.css";
 
 export default function HostedAuth() {
@@ -58,6 +59,37 @@ export default function HostedAuth() {
     setSession(null);
   }
 
+  async function exportAccount() {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await downloadAccountExport();
+      setMessage("Your account export has been downloaded.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Account export failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteAccount() {
+    if (!window.confirm("Permanently delete your ApplyPilot account and all hosted data? This cannot be undone.")) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await api.deleteAccount();
+      if (supabase) await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+      setSession(null);
+      setMessage("Your account and hosted data have been deleted.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Account deletion failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!hostedAuthConfigured) {
     return <HostedShell>
       <h1>Hosted authentication is not configured</h1>
@@ -74,12 +106,19 @@ export default function HostedAuth() {
       <h1>Workspace unavailable</h1>
       <p>Authentication is active for <strong>{session.user.email ?? "your account"}</strong>.</p>
       <div className="hosted-warning">
-        <strong>Hosted workspace is not enabled.</strong>
-        <p>Production API routes remain disabled until per-user PostgreSQL access and private Supabase Storage policies are implemented and verified. No local SQLite data is available to this deployment.</p>
-        <p>Account data export and in-app account deletion are not implemented. Do not use this deployment as a production multi-user service.</p>
+        <strong>Hosted workspace features are not enabled.</strong>
+        <p>The database migration and private-storage policies must be installed before account tools work. Existing job, resume, profile, and history APIs remain disabled; no local SQLite data is available to this deployment.</p>
+        <p>Use export before requesting deletion. Deletion requires the server-only Supabase admin key. Do not use this preview as a production multi-user workspace.</p>
       </div>
       {error && <p className="hosted-error" role="alert">{error}</p>}
-      <button className="hosted-button" type="button" onClick={() => void signOut()}>Sign out</button>
+      {message && <p className="hosted-message" role="status">{message}</p>}
+      <button className="hosted-button" type="button" disabled={busy} onClick={() => void exportAccount()}>
+        {busy ? "Please wait…" : "Export account data"}
+      </button>
+      <button className="hosted-button" type="button" disabled={busy} onClick={() => void deleteAccount()}>
+        Permanently delete account
+      </button>
+      <button className="hosted-button" type="button" disabled={busy} onClick={() => void signOut()}>Sign out</button>
     </HostedShell>;
   }
 
