@@ -171,7 +171,11 @@ passwords or read the user's session. The providers do not offer a public
 consumer OAuth/API flow with the job-account scopes needed for this connection;
 JSearch/Adzuna are the supported job-search API integrations. A real account
 connection requires the provider's official OAuth/API program and approved
-scopes.
+scopes. Users can still sign in on a board and use **Jobs → Add a job → From a
+job board** to copy a listing they can view into their private ApplyPilot
+pipeline. The form stores the supplied title, company, source URL, board, and
+description without fetching a sign-in-protected URL; no board password,
+session cookie, or private account data is accessed by ApplyPilot.
 Hosted users can add or refresh one public job posting URL at a time; fetching
 is limited to public HTTP(S) pages and rejects private-network destinations.
 Search results are saved to the owner's isolated job pipeline. A user can

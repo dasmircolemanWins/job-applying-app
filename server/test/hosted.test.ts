@@ -295,6 +295,35 @@ test("hosted job processing creates reviewable results and keeps batch status ow
     new URL(lookup!.url).searchParams.get("owner_id") === `eq.${userB}`);
 });
 
+test("hosted board import saves user-copied private listings without fetching their URL", async () => {
+  const calls: Captured[] = [];
+  const db: Db = new Map();
+  await withHostedServer(fakePostgrest(calls, db), async base => {
+    const response = await fetch(`${base}/api/jobs`, {
+      method: "POST",
+      headers: { ...requestHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "Customer Support Specialist",
+        company: "Example Corp",
+        url: "https://www.linkedin.com/jobs/view/123456",
+        board: "LinkedIn",
+        text: "Customer Support Specialist at Example Corp. Required skills: customer support, communication.",
+      }),
+    });
+    assert.equal(response.status, 201);
+    const job = await response.json() as { title: string; company: string; url: string; board: string; status: string };
+    assert.equal(job.title, "Customer Support Specialist");
+    assert.equal(job.company, "Example Corp");
+    assert.equal(job.url, "https://www.linkedin.com/jobs/view/123456");
+    assert.equal(job.board, "LinkedIn");
+    assert.equal(job.status, "parsed");
+  });
+  assert.equal(db.get("jobs")?.[0]?.owner_id, userA);
+  assert.equal(db.get("jobs")?.[0]?.description_text,
+    "Customer Support Specialist at Example Corp. Required skills: customer support, communication.");
+  assert.ok(calls.every(call => new URL(call.url).hostname === "example.supabase.co"));
+});
+
 test("hosted API-key test uses the owner's secret without returning it", async () => {
   const calls: Captured[] = [];
   const db: Db = new Map();

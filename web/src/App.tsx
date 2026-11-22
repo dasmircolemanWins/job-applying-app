@@ -340,7 +340,12 @@ function JobsPage({ notify }: { notify: (message: string, kind?: ToastMessage["k
   const [url, setUrl] = useState("");
   const [paste, setPaste] = useState("");
   const [bulk, setBulk] = useState("");
-  const [addMode, setAddMode] = useState<"url" | "paste" | "bulk">("url");
+  const [boardTitle, setBoardTitle] = useState("");
+  const [boardCompany, setBoardCompany] = useState("");
+  const [boardUrl, setBoardUrl] = useState("");
+  const [boardDescription, setBoardDescription] = useState("");
+  const [boardName, setBoardName] = useState(JOB_BOARD_ACCOUNTS[0]?.name ?? "LinkedIn");
+  const [addMode, setAddMode] = useState<"url" | "paste" | "board" | "bulk">("url");
   const [selected, setSelected] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -373,6 +378,21 @@ function JobsPage({ notify }: { notify: (message: string, kind?: ToastMessage["k
       if (!urls.length) return;
       const result = await act(() => api.bulkJobs(urls), "Bulk job import complete");
       if (result) setBulk("");
+    } else if (addMode === "board") {
+      const payload = {
+        title: boardTitle.trim(),
+        company: boardCompany.trim(),
+        url: boardUrl.trim() || undefined,
+        text: boardDescription.trim(),
+        board: boardName,
+      };
+      const job = await act(() => api.addJob(payload), "Job saved to your private pipeline");
+      if (job) {
+        setBoardTitle("");
+        setBoardCompany("");
+        setBoardUrl("");
+        setBoardDescription("");
+      }
     } else {
       const payload = addMode === "url" ? { url: url.trim() } : { text: paste.trim() };
       if (!Object.values(payload)[0]) return;
@@ -437,12 +457,37 @@ function JobsPage({ notify }: { notify: (message: string, kind?: ToastMessage["k
       <p className="muted">Search results are saved to your private pipeline. Arbeitnow listings retain their source link and attribution. Coverage depends on provider and region; no free API guarantees access to every listing on Monster, Snagajob, ZipRecruiter, SimplyHired, or LinkedIn. Review each role before applying.</p>
     </Panel>
     <Panel title="Add a job" subtitle="Save a posting to review it with your own application rules.">
-      <div className="tabs compact-tabs"><button className={addMode === "url" ? "tab active" : "tab"} onClick={() => setAddMode("url")}>Posting URL</button><button className={addMode === "paste" ? "tab active" : "tab"} onClick={() => setAddMode("paste")}>Paste description</button><button className={addMode === "bulk" ? "tab active" : "tab"} onClick={() => setAddMode("bulk")}>Bulk URLs</button></div>
-      <form className="add-job-form" onSubmit={add}>
+      <div className="tabs compact-tabs"><button className={addMode === "url" ? "tab active" : "tab"} onClick={() => setAddMode("url")}>Posting URL</button><button className={addMode === "board" ? "tab active" : "tab"} onClick={() => setAddMode("board")}>From a job board</button><button className={addMode === "paste" ? "tab active" : "tab"} onClick={() => setAddMode("paste")}>Paste description</button><button className={addMode === "bulk" ? "tab active" : "tab"} onClick={() => setAddMode("bulk")}>Bulk URLs</button></div>
+      <form className={`add-job-form${addMode === "board" ? " board-import-form" : ""}`} onSubmit={add}>
         {addMode === "url" && <input aria-label="Job posting URL" type="url" required placeholder="Paste the job posting URL…" value={url} onChange={(e) => setUrl(e.target.value)} />}
+        {addMode === "board" && <>
+          <div className="board-import-heading">
+            <label>Job board
+              <select aria-label="Job board" value={boardName} onChange={(event) => setBoardName(event.target.value)}>
+                {JOB_BOARD_ACCOUNTS.map((board) => <option key={board.name} value={board.name}>{board.name}</option>)}
+              </select>
+            </label>
+            {JOB_BOARD_ACCOUNTS.find((board) => board.name === boardName) && <a
+              className="button button-secondary"
+              href={JOB_BOARD_ACCOUNTS.find((board) => board.name === boardName)?.url}
+              target="_blank"
+              rel="noopener noreferrer"
+            >Open {boardName} ↗</a>}
+          </div>
+          <div className="safety-box board-import-note">
+            <strong>Bring the listing from your board session</strong>
+            <p>Sign in on the board, open the job, then copy and paste its title, company, and description below. ApplyPilot cannot see your board session or read private pages directly.</p>
+          </div>
+          <div className="form-grid">
+            <Field label="Job title"><input required maxLength={200} value={boardTitle} onChange={(event) => setBoardTitle(event.target.value)} placeholder="e.g. Customer Support Specialist" /></Field>
+            <Field label="Company"><input required maxLength={200} value={boardCompany} onChange={(event) => setBoardCompany(event.target.value)} placeholder="Company name" /></Field>
+            <Field label="Original job URL" hint="Optional; useful for opening the listing later." className="col-span-2"><input type="url" value={boardUrl} onChange={(event) => setBoardUrl(event.target.value)} placeholder="https://…" /></Field>
+            <Field label="Job description" className="col-span-2"><textarea required maxLength={200000} rows={7} value={boardDescription} onChange={(event) => setBoardDescription(event.target.value)} placeholder="Paste the job description copied from the board…" /></Field>
+          </div>
+        </>}
         {addMode === "paste" && <textarea aria-label="Job description" required rows={3} placeholder="Paste the full job description…" value={paste} onChange={(e) => setPaste(e.target.value)} />}
         {addMode === "bulk" && <textarea aria-label="Job URLs" required rows={3} placeholder={"Paste one job URL per line…"} value={bulk} onChange={(e) => setBulk(e.target.value)} />}
-        <Button type="submit" variant="primary" disabled={busy}>{busy ? "Adding…" : addMode === "bulk" ? "Import URLs" : "＋ Add job"}</Button>
+        <Button type="submit" variant="primary" disabled={busy}>{busy ? "Adding…" : addMode === "bulk" ? "Import URLs" : addMode === "board" ? "Save job from board" : "＋ Add job"}</Button>
       </form>
     </Panel>
     <Panel title="Your shortlist" subtitle="Filter, qualify, and prepare an application kit when you’re ready." action={<div className="button-group"><span className="muted">{selected.length} selected</span><Button variant="primary" disabled={!selected.length || busy} onClick={runSelected}>✦ Run selected</Button></div>}>
