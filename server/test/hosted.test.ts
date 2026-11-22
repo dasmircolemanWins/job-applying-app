@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { test } from "node:test";
 import { createHostedRouter } from "../src/hosted/router.js";
+import type { HostedOptions } from "../src/hosted/client.js";
 import { DEFAULT_STANDING_FACTS } from "../../shared/types.js";
 
 const userA = "c47a7cc4-69e8-4b80-9aa1-4f59f6b7b44c";
@@ -13,7 +14,11 @@ const env = { NODE_ENV: "production", SUPABASE_URL: "https://example.supabase.co
 type Captured = { url: string; init?: RequestInit };
 type Db = Map<string, Record<string, unknown>[]>;
 
-async function withHostedServer(fetcher: typeof fetch, run: (base: string) => Promise<void>) {
+async function withHostedServer(
+  fetcher: typeof fetch,
+  run: (base: string) => Promise<void>,
+  options: Omit<HostedOptions, "fetcher" | "env"> = {},
+) {
   const app = express();
   app.use(express.json({ limit: "10mb" }));
   app.use((req, res, next) => {
@@ -22,7 +27,7 @@ async function withHostedServer(fetcher: typeof fetch, run: (base: string) => Pr
     res.locals.supabaseAccessToken = token;
     next();
   });
-  app.use("/api", createHostedRouter({ fetcher, env }));
+  app.use("/api", createHostedRouter({ fetcher, env, ...options }));
   const errors: ErrorRequestHandler = (error, _req, res, _next) => {
     const status = typeof error === "object" && error !== null && "status" in error ? Number(error.status) : 500;
     res.status(status).json({ error: error instanceof Error ? error.message : "Request failed" });
@@ -241,7 +246,7 @@ test("cross-user record access fails closed even when the caller knows a row id"
   assert.equal(new URL(request!.url).searchParams.get("owner_id"), `eq.${userB}`);
 });
 
-test("hosted job creation and parsing are owner-scoped while automation remains unavailable", async () => {
+test("hosted job processing creates reviewable results and keeps batch status owner-scoped", async () => {
   const calls: Captured[] = [];
   const db: Db = new Map();
   await withHostedServer(fakePostgrest(calls, db), async base => {
@@ -259,13 +264,87 @@ test("hosted job creation and parsing are owner-scoped while automation remains 
     assert.equal(parsed.status, 200);
     assert.equal((await parsed.json() as { status: string }).status, "parsed");
     const unsupported = await fetch(`${base}/api/jobs/${job.id}/run`, { method: "POST", headers: requestHeaders() });
-    assert.equal(unsupported.status, 503);
-    assert.match((await unsupported.json() as { error: string }).error, /automated job pipeline/i);
+    assert.equal(unsupported.status, 400);
+    assert.match((await unsupported.json() as { error: string }).error, /upload a resume/i);
+
+    const started = await fetch(`${base}/api/jobs/run-all`, {
+      method: "POST", headers: { ...requestHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ statuses: ["parsed"] }),
+    });
+    assert.equal(started.status, 200);
+    assert.equal((await started.json() as { started: number }).started, 1);
+    let status: { running: boolean; done: number; total: number; errors: { jobId: number }[] } = {
+      running: true, done: 0, total: 0, errors: [],
+    };
+    for (let attempt = 0; attempt < 30 && status.running; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const progress = await fetch(`${base}/api/jobs/run-status`, { headers: requestHeaders() });
+      status = await progress.json() as typeof status;
+    }
+    assert.equal(status.running, false);
+    assert.equal(status.done, 1);
+    assert.equal(status.errors.length, 1);
+    const otherOwnerStatus = await fetch(`${base}/api/jobs/run-status`, { headers: requestHeaders("token-b") });
+    assert.deepEqual(await otherOwnerStatus.json(), {
+      running: false, done: 0, total: 0, current: null, errors: [],
+    });
   });
   assert.equal(db.get("jobs")?.[0]?.owner_id, userA);
   const lookup = calls.find(call => new URL(call.url).pathname === "/rest/v1/jobs" && call.init?.method !== "POST");
   assert.ok(new URL(lookup!.url).searchParams.get("owner_id") === `eq.${userA}` ||
     new URL(lookup!.url).searchParams.get("owner_id") === `eq.${userB}`);
+});
+
+test("hosted API-key test uses the owner's secret without returning it", async () => {
+  const calls: Captured[] = [];
+  const db: Db = new Map();
+  let tested: { key: string; model: string } | undefined;
+  await withHostedServer(fakePostgrest(calls, db), async base => {
+    const key = "sk-ant-owner-private";
+    await fetch(`${base}/api/settings`, {
+      method: "PUT", headers: { ...requestHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ anthropicApiKey: key, model: "test-model", mockMode: "off" }),
+    });
+    const response = await fetch(`${base}/api/settings/test-key`, {
+      method: "POST", headers: requestHeaders(),
+    });
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.ok(!text.includes(key));
+    assert.match(text, /API key works/);
+    assert.deepEqual(tested, { key, model: "test-model" });
+  }, {
+    testApiKey: async (key, model) => {
+      tested = { key, model };
+      return { ok: true, model, message: "Anthropic API key works." };
+    },
+  });
+});
+
+test("hosted mailbox settings are owner-isolated and private hosts are rejected", async () => {
+  const calls: Captured[] = [];
+  const db: Db = new Map();
+  await withHostedServer(fakePostgrest(calls, db), async base => {
+    await fetch(`${base}/api/settings`, {
+      method: "PUT", headers: { ...requestHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({
+        imapHost: "127.0.0.1", imapUser: "owner@example.com", imapPassword: "mail-secret",
+      }),
+    });
+    const ownerTest = await fetch(`${base}/api/email/test`, {
+      method: "POST", headers: requestHeaders(),
+    });
+    assert.equal(ownerTest.status, 400);
+    assert.match((await ownerTest.json() as { error: string }).error, /public DNS hostname/i);
+
+    const otherTest = await fetch(`${base}/api/email/test`, {
+      method: "POST", headers: requestHeaders("token-b"),
+    });
+    assert.equal(otherTest.status, 400);
+    assert.match((await otherTest.json() as { error: string }).error, /IMAP host, IMAP username, IMAP password/i);
+  });
+  assert.equal(db.get("settings")?.find(row => row.owner_id === userA && row.key === "imap_password")?.value, "mail-secret");
+  assert.equal(db.get("settings")?.some(row => row.owner_id === userB && row.key === "imap_password"), false);
 });
 
 test("hosted posting research is user-triggered, owner-isolated, and rejects private network URLs", async () => {

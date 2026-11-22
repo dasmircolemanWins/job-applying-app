@@ -1,5 +1,7 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { readSettingOrDefault } from "../config.js";
 import { badRequest } from "../http.js";
 
@@ -8,12 +10,20 @@ export interface EmailSweepData {
   urls: string[];
 }
 
-function mailboxConfig() {
-  const host = readSettingOrDefault("imap_host").trim();
-  const user = readSettingOrDefault("imap_user").trim();
-  const password = readSettingOrDefault("imap_password");
-  const port = Number(readSettingOrDefault("imap_port")) || 993;
-  const folder = readSettingOrDefault("imap_folder").trim() || "INBOX";
+export interface MailboxConfig {
+  host: string;
+  user: string;
+  password: string;
+  port: number;
+  folder: string;
+}
+
+function mailboxConfig(config?: Partial<MailboxConfig>): MailboxConfig {
+  const host = (config?.host ?? readSettingOrDefault("imap_host")).trim();
+  const user = (config?.user ?? readSettingOrDefault("imap_user")).trim();
+  const password = config?.password ?? readSettingOrDefault("imap_password");
+  const port = config?.port ?? (Number(readSettingOrDefault("imap_port")) || 993);
+  const folder = (config?.folder ?? readSettingOrDefault("imap_folder")).trim() || "INBOX";
   const missing = [
     !host && "IMAP host",
     !user && "IMAP username",
@@ -21,6 +31,28 @@ function mailboxConfig() {
   ].filter(Boolean);
   if (missing.length) throw badRequest(`Configure ${missing.join(", ")} in Settings before using email alerts.`);
   return { host, user, password, port, folder };
+}
+
+function privateAddress(address: string): boolean {
+  const value = address.toLowerCase().split("%")[0] ?? address.toLowerCase();
+  if (isIP(value) === 4) {
+    const [a, b] = value.split(".").map(Number);
+    return a === 0 || a === 10 || a === 127 || a === 169 && b === 254
+      || a === 172 && b! >= 16 && b! <= 31 || a === 192 && b === 168 || a! >= 224;
+  }
+  if (value.startsWith("::ffff:")) return privateAddress(value.slice(7));
+  return value === "::" || value === "::1" || value.startsWith("fc") || value.startsWith("fd")
+    || value.startsWith("fe8") || value.startsWith("fe9") || value.startsWith("fea") || value.startsWith("feb");
+}
+
+async function assertPublicMailboxHost(host: string): Promise<void> {
+  if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || isIP(host)) {
+    throw badRequest("IMAP host must be a public DNS hostname.");
+  }
+  const addresses = await lookup(host, { all: true }).catch(() => []);
+  if (!addresses.length || addresses.some(({ address }) => privateAddress(address))) {
+    throw badRequest("IMAP host must resolve only to public IP addresses.");
+  }
 }
 
 function messageSearchText(message: { from?: { text?: string } | null; subject?: string | null; text?: string | null; html?: string | false | null; date?: Date | null }): string {
@@ -46,8 +78,9 @@ function extractJobUrls(text: string): string[] {
   return [...new Set(urls)];
 }
 
-async function withMailbox<T>(fn: (client: ImapFlow) => Promise<T>): Promise<T> {
-  const config = mailboxConfig();
+async function withMailbox<T>(fn: (client: ImapFlow) => Promise<T>, suppliedConfig?: Partial<MailboxConfig>): Promise<T> {
+  const config = mailboxConfig(suppliedConfig);
+  await assertPublicMailboxHost(config.host);
   const client = new ImapFlow({
     host: config.host,
     port: config.port,
@@ -68,9 +101,9 @@ async function withMailbox<T>(fn: (client: ImapFlow) => Promise<T>): Promise<T> 
   }
 }
 
-export async function testMailbox(): Promise<{ ok: true; message: string; mailboxCount: number }> {
+export async function testMailbox(config?: Partial<MailboxConfig>): Promise<{ ok: true; message: string; mailboxCount: number }> {
   return withMailbox(async client => {
-    const lock = await client.getMailboxLock(readSettingOrDefault("imap_folder").trim() || "INBOX");
+    const lock = await client.getMailboxLock(mailboxConfig(config).folder);
     try {
       const mailbox = client.mailbox;
       const count = typeof mailbox === "object" && mailbox !== null && "exists" in mailbox
@@ -79,12 +112,12 @@ export async function testMailbox(): Promise<{ ok: true; message: string; mailbo
     } finally {
       lock.release();
     }
-  });
+  }, config);
 }
 
-export async function sweepMailbox(sinceDays: number): Promise<EmailSweepData> {
+export async function sweepMailbox(sinceDays: number, config?: Partial<MailboxConfig>): Promise<EmailSweepData> {
   return withMailbox(async client => {
-    const folder = readSettingOrDefault("imap_folder").trim() || "INBOX";
+    const folder = mailboxConfig(config).folder;
     const lock = await client.getMailboxLock(folder);
     try {
       const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000);
@@ -99,9 +132,9 @@ export async function sweepMailbox(sinceDays: number): Promise<EmailSweepData> {
         urls.push(...extractJobUrls(messageSearchText(parsed)));
         count++;
       }
-      return { scanned: count, urls: [...new Set(urls)] };
+      return { scanned: count, urls: [...new Set(urls)].slice(0, 100) };
     } finally {
       lock.release();
     }
-  });
+  }, config);
 }

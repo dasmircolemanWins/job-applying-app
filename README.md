@@ -154,21 +154,26 @@ server-only admin key is configured. Each database request uses the signed-in
 user's token and owner scope, with PostgreSQL row-level security as an
 additional boundary.
 
-The following workflows are **not yet available in hosted mode** and respond
-with an explicit unavailable error: bulk URL importing, automated job
-processing, API-key testing, and mailbox integration. Hosted users can search
-Arbeitnow at no cost and without a key; its free public API primarily covers
-European/UK listings sourced from ATS feeds and requires us to preserve the
-job link and Arbeitnow attribution. For broader coverage, users can configure
+Bulk URL importing is **not yet available in hosted mode** and responds with
+an explicit unavailable error. Hosted users can search Arbeitnow at no cost
+and without a key; its free public API primarily covers European/UK listings
+sourced from ATS feeds and requires us to preserve the job link and Arbeitnow
+attribution. For broader coverage, users can configure
 their own JSearch (RapidAPI) or Adzuna credentials in Settings. JSearch
 aggregates listings from its participating sources; board coverage (which may
 include sites such as Monster, Snagajob, ZipRecruiter, SimplyHired, or LinkedIn)
 depends on the provider's current catalog and terms. ApplyPilot does not scrape
 those sites or bypass their access controls.
-Hosted users can also add or refresh one public job posting URL at a time;
-fetching is limited to public HTTP(S) pages and rejects private-network
-destinations. Search results are saved to the owner's isolated job pipeline;
-they are not auto-applied.
+Hosted users can add or refresh one public job posting URL at a time; fetching
+is limited to public HTTP(S) pages and rejects private-network destinations.
+Search results are saved to the owner's isolated job pipeline. A user can
+explicitly run a job or process up to 25 queued jobs into qualification results
+and reviewable application drafts. Mailbox integration is optional: users
+provide their own TLS IMAP app-password settings, test the connection, and
+manually sweep recent alerts. Sweeps only scan messages for public job links
+and save matching listings to that user's workspace. API-key checks make one
+small test request using the selected Anthropic key. None of these workflows
+submits an application or sends an employer message.
 Hosted accounts start with fresh data; there is no local resume or history
 migration/import. Resume uploads are limited to 10 per account, enforced by
 both the API and a transaction-safe PostgreSQL trigger.

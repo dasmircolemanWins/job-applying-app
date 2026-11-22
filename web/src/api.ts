@@ -147,7 +147,7 @@ export const api = {
   runs: () => request<AgentRun[]>("/agent-runs"),
   emailTest: () => request<{ ok: boolean; message: string; mailboxCount?: number }>("/email/test", json("POST")),
   emailSweep: (sinceDays = 7) =>
-    request<{ emailsScanned: number; urlsFound: number; jobsCreated: Job[]; duplicates: number }>("/email/sweep", json("POST", { sinceDays })),
+    request<{ emailsScanned: number; urlsFound: number; jobsCreated: Job[]; duplicates: number; failed: { url: string; error: string }[] }>("/email/sweep", json("POST", { sinceDays })),
 };
 
 export const downloadAccountExport = () =>

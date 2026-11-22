@@ -5,6 +5,7 @@ import { HttpError } from "../http.js";
 export interface HostedOptions {
   fetcher?: typeof fetch;
   env?: NodeJS.ProcessEnv;
+  testApiKey?: (apiKey: string, model: string) => Promise<{ ok: boolean; model: string; message: string }>;
 }
 
 export interface HostedContext {

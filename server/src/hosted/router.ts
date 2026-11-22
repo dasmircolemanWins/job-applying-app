@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import multer from "multer";
+import Anthropic from "@anthropic-ai/sdk";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import * as cheerio from "cheerio";
@@ -12,12 +13,13 @@ import {
 import type {
   ApplicationRoute, ExperienceBank, JobDiscoveryInput, JobPosting, JobStatus, MasterBrainAgentId,
   MasterBrainFinalDecision, MasterBrainRecommendation, MasterBrainRunReview, Qualification,
-  ResumeDocument, ResumeSelection, Rules, ScreeningAnswer, StandingFacts, Story,
+  ResumeDocument, ResumeSelection, Rules, RunStatus, ScreeningAnswer, StandingFacts, Story,
 } from "../../../shared/types.js";
 import { HttpError, asyncHandler, badRequest, conflict, idParam, notFound, validate } from "../http.js";
 import { extractResumeTextFromBuffer, ALLOWED_RESUME_TYPES } from "../services/resumeParse.js";
 import { renderResume } from "../services/render.js";
 import { fetchJobText } from "../services/jobFetch.js";
+import { sweepMailbox, testMailbox, type MailboxConfig } from "../services/emailAlerts.js";
 import {
   deleteRows, hostedContext, hostedRequest, insertRow, selectAllRows, selectPage, selectRows, storageAuthenticatedPath,
   storageObjectPath, updateRows, type HostedContext, type HostedOptions,
@@ -681,6 +683,71 @@ async function qualifyHostedJob(ctx: HostedContext, id: number): Promise<Row> {
   return updated[0] ?? { ...parsedRow, qualification_json: qualification, fit_score: qualification.fitScore, status, status_reason: statusReason };
 }
 
+async function buildHostedKit(ctx: HostedContext, id: number, previouslyQualified?: Row): Promise<Row> {
+  const qualified = previouslyQualified ?? await qualifyHostedJob(ctx, id);
+  const qualification = decodeJson<Qualification | null>(qualified.qualification_json, null);
+  if (!qualification?.qualifies) {
+    throw conflict(`Job did not qualify: ${String(qualified.status_reason ?? "hard rules or qualification threshold")}`);
+  }
+  const { resumes } = await loadExperienceBank(ctx);
+  if (!resumes.length) throw badRequest("Upload a resume before building an application kit");
+  const posting = decodeJson<JobPosting | null>(qualified.parsed_json, null);
+  if (!posting) throw badRequest("Job description could not be parsed");
+  const ranked = resumes.map(({ id: resumeId, doc }) => {
+    const searchable = JSON.stringify(doc).toLowerCase();
+    const strengths = posting.keywords.filter(keyword => searchable.includes(keyword.toLowerCase()));
+    return {
+      resumeId, score: posting.keywords.length ? Math.round(100 * strengths.length / posting.keywords.length) : 50,
+      strengths: strengths.slice(0, 12),
+      weaknesses: posting.requiredSkills.filter(skill => !searchable.includes(skill.toLowerCase())).slice(0, 12),
+    };
+  }).sort((left, right) => right.score - left.score);
+  const selectedResumeId = ranked[0]?.resumeId;
+  const selected = resumes.find(item => item.id === selectedResumeId);
+  if (!selected || selectedResumeId === undefined) throw badRequest("No analyzed resume was selected");
+  const selection: ResumeSelection = {
+    rankings: ranked, selectedResumeId,
+    rationale: "Selected the uploaded resume with the strongest deterministic keyword match.",
+  };
+  const tailored = tailorManualResume(posting, selected.doc);
+  const facts = await profileFacts(ctx);
+  const rules = await profileRules(ctx);
+  const stories = (await selectAllRows<Row>(ctx, "stories", {}, "&order=id.asc")).map((row): Story => ({
+    id: numberId(row), key: String(row.key ?? ""), title: String(row.title ?? ""), body: String(row.body ?? ""),
+    approved: row.approved === true, createdAt: String(row.created_at ?? ""), updatedAt: String(row.updated_at ?? ""),
+  }));
+  const generated = makeManualAnswers(posting.screeningQuestions, facts, stories, posting, rules);
+  const ts = now();
+  const current = await one(ctx, "application_kits", { job_id: encodedEq(id) });
+  const artifacts = await storeRenderedKit(ctx, qualified, tailored.document);
+  const values = {
+    selected_resume_id: selectedResumeId, selection_json: selection, tailored_json: tailored.document,
+    honesty_json: tailored.honesty, keyword_json: tailored.keywords, answers_json: generated.answers,
+    cover_letter: generated.coverLetter, pdf_path: artifacts.pdfPath, docx_path: artifacts.docxPath,
+    status: "draft", updated_at: ts,
+  };
+  let kit: Row;
+  try {
+    kit = current
+      ? (await updateRows<Row>(ctx, "application_kits", { id: encodedEq(numberId(current)) }, values))[0] ?? { ...current, ...values }
+      : await insertRow<Row>(ctx, "application_kits", { ...values, job_id: id, created_at: ts });
+  } catch (error) {
+    await removeKitObjects(ctx, { pdf_path: artifacts.pdfPath, docx_path: artifacts.docxPath });
+    throw error;
+  }
+  await updateRows(ctx, "jobs", { id: encodedEq(id) }, { status: "kit_ready", status_reason: null, updated_at: ts });
+  await removeKitObjects(ctx, current);
+  return kit;
+}
+
+async function processHostedJob(ctx: HostedContext, id: number): Promise<Row> {
+  await parseHostedJob(ctx, id);
+  const qualified = await qualifyHostedJob(ctx, id);
+  const qualification = decodeJson<Qualification | null>(qualified.qualification_json, null);
+  if (qualification?.qualifies) await buildHostedKit(ctx, id, qualified);
+  return required(ctx, "jobs", { id: encodedEq(id) }, "Job");
+}
+
 async function storeRenderedKit(ctx: HostedContext, job: Row, document: ResumeDocument): Promise<{ pdfPath: string; docxPath: string }> {
   const rendered = await renderResume(numberId(job), String(job.company ?? ""), String(job.title ?? ""), document);
   const uploaded: string[] = [];
@@ -954,6 +1021,7 @@ export function createHostedRouter(options: HostedOptions = {}) {
   const router = Router();
   const context = (req: Request, res: Response) => hostedContext(req, res, options);
   const readyUntil = new Map<string, number>();
+  const processingRuns = new Map<string, RunStatus>();
 
   router.use(asyncHandler(async (req, res, next) => {
     const ctx = context(req, res);
@@ -1072,7 +1140,49 @@ export function createHostedRouter(options: HostedOptions = {}) {
       dataDir: "Private hosted workspace", browserInstalled: false,
     });
   }));
-  router.post("/settings/test-key", unavailable("API-key testing"));
+  router.post("/settings/test-key", asyncHandler(async (req, res) => {
+    const ctx = context(req, res);
+    const rows = await selectRows<Row>(ctx, "settings");
+    const values = new Map(rows.map(row => [String(row.key), String(row.value ?? "")]));
+    const key = values.get("anthropic_api_key")?.trim()
+      || (options.env?.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "").trim();
+    const model = values.get("model") || DEFAULT_MODEL;
+    const mode = values.get("mock_mode") || "auto";
+    if (!key) {
+      res.json({ ok: false, model, message: "Add an Anthropic API key in Settings before testing it." });
+      return;
+    }
+    if (mode === "on") {
+      res.json({ ok: false, model, message: "Mock mode is forced on. Set it to Auto or Always live before testing the key." });
+      return;
+    }
+    if (options.testApiKey) {
+      res.json(await options.testApiKey(key, model));
+      return;
+    }
+    try {
+      const client = new Anthropic({ apiKey: key, maxRetries: 0 });
+      await client.messages.create({
+        model, max_tokens: 8,
+        messages: [{ role: "user", content: "Reply with OK." }],
+      });
+      res.json({ ok: true, model, message: "Anthropic API key works." });
+    } catch (error) {
+      if (error instanceof Anthropic.AuthenticationError) {
+        res.json({ ok: false, model, message: "Anthropic rejected this API key. Check the key in Settings." });
+        return;
+      }
+      if (error instanceof Anthropic.RateLimitError) {
+        res.json({ ok: false, model, message: "Anthropic rate limit reached. Try testing the key again later." });
+        return;
+      }
+      if (error instanceof Anthropic.APIError) {
+        res.json({ ok: false, model, message: `Anthropic API returned HTTP ${error.status ?? "error"}. Check the model and key.` });
+        return;
+      }
+      res.json({ ok: false, model, message: "Could not reach Anthropic to test this key. Try again shortly." });
+    }
+  }));
 
   router.get("/profile", asyncHandler(async (req, res) => {
     const row = await one(context(req, res), "profile", {});
@@ -1342,8 +1452,56 @@ export function createHostedRouter(options: HostedOptions = {}) {
     });
   }));
   router.post("/jobs/bulk", unavailable("Bulk URL importing"));
-  router.post("/jobs/run-all", unavailable("Automated job pipeline"));
-  router.get("/jobs/run-status", (_req, res) => res.status(503).json({ error: "Job pipeline status is unavailable in hosted mode." }));
+  router.post("/jobs/run-all", asyncHandler(async (req, res) => {
+    const ctx = context(req, res);
+    const body = validate(req.body ?? {}, z.object({
+      statuses: z.array(z.enum(JOB_STATUSES)).max(JOB_STATUSES.length).optional(),
+    }).strict());
+    const selectedStatuses = body.statuses?.length ? body.statuses : ["new", "parsed", "qualified"] as JobStatus[];
+    const processableStatuses = new Set<JobStatus>(["new", "parsed", "qualified"]);
+    if (selectedStatuses.some(status => !processableStatuses.has(status))) {
+      throw badRequest("Automated processing only accepts new, parsed, or qualified jobs.");
+    }
+    if (processingRuns.get(ctx.ownerId)?.running) throw conflict("A job-processing run is already active for this workspace.");
+    const statusSet = new Set(selectedStatuses);
+    const jobs = (await selectAllRows<Row>(ctx, "jobs", {}, "&order=id.asc"))
+      .filter(job => statusSet.has(String(job.status) as JobStatus));
+    if (jobs.length > 25) throw badRequest("Process at most 25 jobs per run. Narrow the status filter and try again.");
+    const status: RunStatus = {
+      running: jobs.length > 0, done: 0, total: jobs.length, current: null, errors: [],
+    };
+    processingRuns.set(ctx.ownerId, status);
+    if (!jobs.length) {
+      res.json({ started: 0 });
+      return;
+    }
+    res.json({ started: jobs.length });
+    void (async () => {
+      try {
+        for (const job of jobs) {
+          status.current = {
+            jobId: numberId(job), title: String(job.title ?? ""), company: String(job.company ?? ""),
+          };
+          try {
+            await processHostedJob(ctx, numberId(job));
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Job processing failed.";
+            status.errors.push({ jobId: numberId(job), error: message });
+          }
+          status.done += 1;
+        }
+      } finally {
+        status.running = false;
+        status.current = null;
+      }
+    })();
+  }));
+  router.get("/jobs/run-status", (req, res) => {
+    const ctx = context(req, res);
+    res.json(processingRuns.get(ctx.ownerId) ?? {
+      running: false, done: 0, total: 0, current: null, errors: [],
+    } satisfies RunStatus);
+  });
   router.get("/jobs/:id", asyncHandler(async (req, res) => {
     const ctx = context(req, res);
     const id = idParam(req.params.id);
@@ -1407,62 +1565,24 @@ export function createHostedRouter(options: HostedOptions = {}) {
   router.post("/jobs/:id/build-kit", asyncHandler(async (req, res) => {
     const ctx = context(req, res);
     const id = idParam(req.params.id);
-    const qualified = await qualifyHostedJob(ctx, id);
-    const qualification = decodeJson<Qualification | null>(qualified.qualification_json, null);
-    if (!qualification?.qualifies) {
-      throw conflict(`Job did not qualify: ${String(qualified.status_reason ?? "hard rules or qualification threshold")}`);
-    }
-    const { resumes } = await loadExperienceBank(ctx);
-    if (!resumes.length) throw badRequest("Upload a resume before building an application kit");
-    const posting = decodeJson<JobPosting | null>(qualified.parsed_json, null);
-    if (!posting) throw badRequest("Job description could not be parsed");
-    const ranked = resumes.map(({ id: resumeId, doc }) => {
-      const searchable = JSON.stringify(doc).toLowerCase();
-      const strengths = posting.keywords.filter(keyword => searchable.includes(keyword.toLowerCase()));
-      return {
-        resumeId, score: posting.keywords.length ? Math.round(100 * strengths.length / posting.keywords.length) : 50,
-        strengths: strengths.slice(0, 12),
-        weaknesses: posting.requiredSkills.filter(skill => !searchable.includes(skill.toLowerCase())).slice(0, 12),
-      };
-    }).sort((left, right) => right.score - left.score);
-    const selectedResumeId = ranked[0]?.resumeId;
-    const selected = resumes.find(item => item.id === selectedResumeId);
-    if (!selected || selectedResumeId === undefined) throw badRequest("No analyzed resume was selected");
-    const selection: ResumeSelection = {
-      rankings: ranked, selectedResumeId,
-      rationale: "Selected the uploaded resume with the strongest deterministic keyword match.",
-    };
-    const tailored = tailorManualResume(posting, selected.doc);
-    const facts = await profileFacts(ctx);
-    const rules = await profileRules(ctx);
-    const stories = (await selectAllRows<Row>(ctx, "stories", {}, "&order=id.asc")).map((row): Story => ({
-      id: numberId(row), key: String(row.key ?? ""), title: String(row.title ?? ""), body: String(row.body ?? ""),
-      approved: row.approved === true, createdAt: String(row.created_at ?? ""), updatedAt: String(row.updated_at ?? ""),
-    }));
-    const generated = makeManualAnswers(posting.screeningQuestions, facts, stories, posting, rules);
-    const ts = now();
-    const current = await one(ctx, "application_kits", { job_id: encodedEq(id) });
-    const artifacts = await storeRenderedKit(ctx, qualified, tailored.document);
-    const values = {
-      selected_resume_id: selectedResumeId, selection_json: selection, tailored_json: tailored.document,
-      honesty_json: tailored.honesty, keyword_json: tailored.keywords, answers_json: generated.answers,
-      cover_letter: generated.coverLetter, pdf_path: artifacts.pdfPath, docx_path: artifacts.docxPath,
-      status: "draft", updated_at: ts,
-    };
-    let kit: Row;
-    try {
-      kit = current
-        ? (await updateRows<Row>(ctx, "application_kits", { id: encodedEq(numberId(current)) }, values))[0] ?? { ...current, ...values }
-        : await insertRow<Row>(ctx, "application_kits", { ...values, job_id: id, created_at: ts });
-    } catch (error) {
-      await removeKitObjects(ctx, { pdf_path: artifacts.pdfPath, docx_path: artifacts.docxPath });
-      throw error;
-    }
-    await updateRows(ctx, "jobs", { id: encodedEq(id) }, { status: "kit_ready", status_reason: null, updated_at: ts });
-    await removeKitObjects(ctx, current);
-    res.json(kitView(kit));
+    res.json(kitView(await buildHostedKit(ctx, id)));
   }));
-  router.post("/jobs/:id/run", unavailable("Automated job pipeline"));
+  router.post("/jobs/:id/run", asyncHandler(async (req, res) => {
+    const ctx = context(req, res);
+    const id = idParam(req.params.id);
+    const job = await processHostedJob(ctx, id);
+    const [kit, apps, blocked, parked] = await Promise.all([
+      one(ctx, "application_kits", { job_id: encodedEq(id) }),
+      selectRows<Row>(ctx, "applications", { job_id: encodedEq(id) }, "&order=submitted_at.desc&limit=1"),
+      selectRows<Row>(ctx, "blocked_items", { job_id: encodedEq(id) }, "&order=id.desc"),
+      selectRows<Row>(ctx, "parked_items", { job_id: encodedEq(id) }, "&order=id.desc"),
+    ]);
+    res.json({
+      job: jobView(job), kit: kitView(kit), application: apps[0] ? applicationView(apps[0]) : null,
+      blocked: await Promise.all(blocked.map(async item => blockedView(item, await one(ctx, "jobs", { id: encodedEq(Number(item.job_id)) })))),
+      parked: await Promise.all(parked.map(async item => parkedView(item, await one(ctx, "jobs", { id: encodedEq(Number(item.job_id)) })))),
+    });
+  }));
   router.put("/jobs/:id/kit", asyncHandler(async (req, res) => {
     const ctx = context(req, res);
     const id = idParam(req.params.id);
@@ -1943,7 +2063,61 @@ export function createHostedRouter(options: HostedOptions = {}) {
     res.json(assistView(updated));
   }));
 
-  router.post("/email/test", unavailable("Mailbox integration"));
-  router.post("/email/sweep", unavailable("Mailbox integration"));
+  async function ownerMailboxConfig(ctx: HostedContext): Promise<MailboxConfig> {
+    const rows = await selectRows<Row>(ctx, "settings");
+    const values = new Map(rows.map(row => [String(row.key), String(row.value ?? "")]));
+    return {
+      host: values.get("imap_host") ?? "",
+      user: values.get("imap_user") ?? "",
+      password: values.get("imap_password") ?? "",
+      port: Number(values.get("imap_port")) || 993,
+      folder: values.get("imap_folder") || "INBOX",
+    };
+  }
+  router.post("/email/test", asyncHandler(async (req, res) => {
+    res.json(await testMailbox(await ownerMailboxConfig(context(req, res))));
+  }));
+  router.post("/email/sweep", asyncHandler(async (req, res) => {
+    const ctx = context(req, res);
+    const body = validate(req.body ?? {}, z.object({
+      sinceDays: z.number().int().min(1).max(365).default(7),
+    }).strict());
+    const mailbox = await sweepMailbox(body.sinceDays, await ownerMailboxConfig(ctx));
+    const jobsCreated: Row[] = [];
+    const duplicates: string[] = [];
+    const failed: { url: string; error: string }[] = [];
+    for (const url of mailbox.urls) {
+      try {
+        const description = await fetchJobText(url);
+        const posting = parseManualJob(description, url, { title: "", company: "" });
+        const dedupeKey = jobDedupeKey(posting.company, posting.title, description);
+        if (await one(ctx, "jobs", { dedupe_key: encodedEq(dedupeKey) })) {
+          duplicates.push(url);
+          continue;
+        }
+        const ts = now();
+        const inserted = await insertRow<Row>(ctx, "jobs", {
+          source: "email", url, title: posting.title, company: posting.company, location: posting.location,
+          remote_type: posting.remoteType, description_text: description, ats_vendor: posting.atsVendor,
+          posting_id: posting.postingId ?? null, board: "email alert", status: "new", status_reason: null,
+          dedupe_key: dedupeKey, found_at: ts, created_at: ts, updated_at: ts,
+        });
+        try {
+          jobsCreated.push(jobView(await parseHostedJob(ctx, numberId(inserted))));
+        } catch (error) {
+          await deleteRows(ctx, "jobs", { id: encodedEq(numberId(inserted)) });
+          throw error;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to add this job from email.";
+        if (/matching job already exists/i.test(message)) duplicates.push(url);
+        else failed.push({ url, error: message });
+      }
+    }
+    res.json({
+      emailsScanned: mailbox.scanned, urlsFound: mailbox.urls.length,
+      jobsCreated, duplicates: duplicates.length, failed,
+    });
+  }));
   return router;
 }
