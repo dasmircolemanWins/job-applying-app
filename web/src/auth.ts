@@ -2,6 +2,8 @@
 
 import { createClient } from "@supabase/supabase-js";
 
+export const INVALID_SESSION_EVENT = "applypilot:invalid-session";
+
 const rawSupabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
 

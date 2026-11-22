@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { hostedAuthConfigured, supabase } from "./auth";
+import { hostedAuthConfigured, INVALID_SESSION_EVENT, supabase } from "./auth";
 import { api, downloadAccountExport } from "./api";
 import "./hosted-auth.css";
 
@@ -19,19 +19,32 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
       setChecking(false);
       return;
     }
+    const client = supabase;
     let active = true;
-    void supabase.auth.getSession().then(({ data, error: sessionError }) => {
+    void client.auth.getSession().then(({ data, error: sessionError }) => {
       if (!active) return;
       setSession(data.session);
       if (sessionError) setError(sessionError.message);
       setChecking(false);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: { subscription } } = client.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
     });
+    const handleInvalidSession = () => {
+      setError("Your saved session is no longer valid. Sign in again to continue.");
+      setMessage("");
+      setSession(null);
+      void client.auth.signOut({ scope: "local" }).then(({ error: signOutError }) => {
+        if (signOutError) {
+          setError("Your session is no longer valid. Refresh this page, then sign in again.");
+        }
+      });
+    };
+    window.addEventListener(INVALID_SESSION_EVENT, handleInvalidSession);
     return () => {
       active = false;
       subscription.unsubscribe();
+      window.removeEventListener(INVALID_SESSION_EVENT, handleInvalidSession);
     };
   }, []);
 

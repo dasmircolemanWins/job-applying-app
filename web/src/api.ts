@@ -6,7 +6,7 @@ import type {
   Resume, ResumeSummary, ResumeUpdate, RunStatus, ScreeningAnswer, Settings, SettingsUpdate, StandingFacts,
   Rules, Story, StoryUpdate, TestKeyResult, WeeklyReport,
 } from "../../shared/types";
-import { getAccessToken } from "./auth";
+import { getAccessToken, INVALID_SESSION_EVENT } from "./auth";
 
 function apiRoot(): string {
   const configuredBase = import.meta.env.VITE_API_BASE_URL?.trim();
@@ -57,6 +57,9 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
       if (body.error) message = body.error;
     } catch {
       // Keep the status message when the server response is not JSON.
+    }
+    if (response.status === 401 && accessToken) {
+      window.dispatchEvent(new Event(INVALID_SESSION_EVENT));
     }
     throw new Error(message);
   }
