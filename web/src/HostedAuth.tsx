@@ -54,6 +54,13 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
     const form = new FormData(event.currentTarget);
     const email = String(form.get("email") ?? "").trim();
     const password = String(form.get("password") ?? "");
+    const firstName = String(form.get("firstName") ?? "").trim();
+    const lastName = String(form.get("lastName") ?? "").trim();
+    const birthdate = String(form.get("birthdate") ?? "");
+    const address = String(form.get("address") ?? "").trim();
+    const city = String(form.get("city") ?? "").trim();
+    const state = String(form.get("state") ?? "").trim();
+    const zipCode = String(form.get("zipCode") ?? "").trim();
     setBusy(true);
     setError("");
     setMessage("");
@@ -62,12 +69,23 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
         ? await supabase.auth.signUp({
           email,
           password,
-          options: { emailRedirectTo: new URL("/", window.location.origin).toString() },
+          options: {
+            emailRedirectTo: new URL("/", window.location.origin).toString(),
+            data: {
+              first_name: firstName,
+              last_name: lastName,
+              birthdate,
+              address,
+              city,
+              state,
+              zip_code: zipCode,
+            },
+          },
         })
         : await supabase.auth.signInWithPassword({ email, password });
       if (authError) throw authError;
       if (mode === "signup" && !data.session) {
-        setMessage("Account created. Check your email and confirm your address before signing in.");
+        setMessage("Your account is ready. Check your email to confirm your address before signing in.");
       } else {
         setSession(data.session);
       }
@@ -200,19 +218,52 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
 
   return <HostedShell>
     <div className="hosted-eyebrow">ApplyPilot secure account</div>
-    <h1>Sign in</h1>
-    <p>{mode === "signup" ? "Create a private workspace. Verify your email before signing in." : "Sign in to your private ApplyPilot workspace."}</p>
+    <h1>{mode === "signup" ? "Create your account" : "Welcome back"}</h1>
+    <p>{mode === "signup" ? "Set up your private ApplyPilot workspace." : "Sign in to your private ApplyPilot workspace."}</p>
     <form className="hosted-form" onSubmit={(event) => void submit(event)}>
+      {mode === "signup" && <>
+        <fieldset className="hosted-fieldset">
+          <legend>Personal information</legend>
+          <div className="hosted-form-grid">
+            <label>First name
+              <input name="firstName" type="text" autoComplete="given-name" maxLength={100} required />
+            </label>
+            <label>Last name
+              <input name="lastName" type="text" autoComplete="family-name" maxLength={100} required />
+            </label>
+            <label className="hosted-span-two">Birthdate
+              <input name="birthdate" type="date" autoComplete="bday" max={new Date().toISOString().slice(0, 10)} required />
+            </label>
+          </div>
+        </fieldset>
+        <fieldset className="hosted-fieldset">
+          <legend>Home address</legend>
+          <div className="hosted-form-grid">
+            <label className="hosted-span-two">Street address
+              <input name="address" type="text" autoComplete="street-address" maxLength={200} required />
+            </label>
+            <label>City
+              <input name="city" type="text" autoComplete="address-level2" maxLength={100} required />
+            </label>
+            <label>State
+              <input name="state" type="text" autoComplete="address-level1" maxLength={100} required />
+            </label>
+            <label className="hosted-span-two">ZIP / postal code
+              <input name="zipCode" type="text" autoComplete="postal-code" maxLength={20} required />
+            </label>
+          </div>
+        </fieldset>
+      </>}
       <label>Email
-        <input name="email" type="email" autoComplete="email" required />
+        <input name="email" type="email" autoComplete="email" maxLength={254} required />
       </label>
       <label>Password
-        <input name="password" type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} minLength={8} required />
+        <input name="password" type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} minLength={8} maxLength={128} required />
       </label>
       {error && <p className="hosted-error" role="alert">{error}</p>}
       {message && <p className="hosted-message" role="status">{message}</p>}
       <button className="hosted-button" type="submit" disabled={busy}>
-        {busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
+        {busy ? "Please wait…" : mode === "signup" ? "Create your account" : "Sign in"}
       </button>
     </form>
     <button className="hosted-link" type="button" onClick={() => {
@@ -220,9 +271,11 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
       setError("");
       setMessage("");
     }}>
-      {mode === "signin" ? "New here? Create an account" : "Already have an account? Sign in"}
+      {mode === "signin" ? "New to ApplyPilot? Create your account" : "Already have an account? Sign in"}
     </button>
-    <p className="hosted-note">Email verification is required. Each account gets a private, user-isolated workspace.</p>
+    <p className="hosted-note">{mode === "signup"
+      ? "We store your account details securely with your private account. Email verification is required before sign-in."
+      : "Each account gets a private, user-isolated workspace."}</p>
   </HostedShell>;
 }
 
