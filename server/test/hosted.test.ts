@@ -506,6 +506,10 @@ test("master brain recommendations and feedback stay within each owner's workspa
       { id: 3, owner_id: userA, title: "Designer", company: "Elsewhere", description_text: "Design role", status: "qualified", parsed_json: { requiredSkills: [] }, qualification_json: { qualifies: true } },
     ]],
     ["application_kits", [{ id: 1, owner_id: userA, job_id: 3, honesty_json: { verdict: "fail", unsupportedCount: 1 } }]],
+    ["agent_runs", [
+      { id: 4, owner_id: userA, agent: "HonestyChecker", job_id: 3, ok: true, created_at: "2026-02-01T10:00:00Z" },
+      { id: 5, owner_id: userB, agent: "Qualifier", job_id: null, ok: false, created_at: "2026-02-01T11:00:00Z" },
+    ]],
     ["brain_feedback", [{ id: 1, owner_id: userA, agent: "application_strategist", helpful: true }]],
   ]);
   const fetcher = fakePostgrest(calls, db);
@@ -515,11 +519,16 @@ test("master brain recommendations and feedback stay within each owner's workspa
     const reportA = await ownerA.json() as {
       learningSignals: number; agents: { id: string; userRating: boolean | null }[];
       recommendations: { agentId: string; priority: string }[];
+      reviewedDecisions: { runId: number; verdict: string }[];
+      finalDecision: { outcome: string; title: string };
     };
     assert.equal(reportA.learningSignals, 1);
     assert.equal(reportA.agents.find(agent => agent.id === "application_strategist")?.userRating, true);
     assert.ok(reportA.recommendations.some(item => item.agentId === "resume_analyst"));
     assert.ok(reportA.recommendations.some(item => item.agentId === "truth_guard" && item.priority === "high"));
+    assert.deepEqual(reportA.reviewedDecisions.map(review => review.runId), [4]);
+    assert.equal(reportA.reviewedDecisions[0]?.verdict, "do_not_use");
+    assert.equal(reportA.finalDecision.outcome, "hold_for_review");
 
     const saved = await fetch(`${base}/api/brain/feedback`, {
       method: "PUT", headers: { ...requestHeaders("token-b"), "content-type": "application/json" },
@@ -532,10 +541,14 @@ test("master brain recommendations and feedback stay within each owner's workspa
     const reportB = await ownerB.json() as {
       learningSignals: number; recommendations: { agentId: string }[];
       agents: { id: string; userRating: boolean | null }[];
+      reviewedDecisions: { runId: number; verdict: string }[];
+      finalDecision: { outcome: string };
     };
     assert.equal(reportB.learningSignals, 1);
     assert.deepEqual(reportB.recommendations, []);
     assert.equal(reportB.agents.find(agent => agent.id === "role_researcher")?.userRating, true);
+    assert.deepEqual(reportB.reviewedDecisions.map(review => review.runId), [5]);
+    assert.equal(reportB.finalDecision.outcome, "no_action");
 
     const refreshedA = await fetch(`${base}/api/brain`, { headers: requestHeaders() });
     const reportAAfter = await refreshedA.json() as { learningSignals: number };

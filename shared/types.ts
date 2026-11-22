@@ -797,12 +797,33 @@ export interface MasterBrainRecommendation {
   priority: "high" | "normal";
 }
 
+export interface MasterBrainRunReview {
+  runId: number;
+  specialist: string;
+  jobId: number | null;
+  jobTitle: string | null;
+  runSucceeded: boolean;
+  verdict: "supported" | "needs_review" | "do_not_use";
+  rationale: string;
+  href: string | null;
+}
+
+export interface MasterBrainFinalDecision {
+  outcome: "hold_for_review" | "prepare_draft" | "complete_missing_data" | "no_action";
+  title: string;
+  rationale: string;
+  evidence: string[];
+  recommendationId: string | null;
+}
+
 export interface MasterBrainReport {
   generatedAt: string;
   summary: string;
   learningSignals: number;
   agents: MasterBrainAgent[];
   recommendations: MasterBrainRecommendation[];
+  reviewedDecisions: MasterBrainRunReview[];
+  finalDecision: MasterBrainFinalDecision;
 }
 
 export interface LedgerResponse {

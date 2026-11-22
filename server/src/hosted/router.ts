@@ -9,8 +9,9 @@ import {
   EFFORT_LEVELS, JOB_STATUSES, MASTER_BRAIN_AGENTS, MAX_RESUMES, MAX_UPLOAD_BYTES, MOCK_MODES,
 } from "../../../shared/types.js";
 import type {
-  ApplicationRoute, ExperienceBank, JobPosting, JobStatus, MasterBrainAgentId, MasterBrainRecommendation,
-  Qualification, ResumeDocument, ResumeSelection, Rules, ScreeningAnswer, StandingFacts, Story,
+  ApplicationRoute, ExperienceBank, JobPosting, JobStatus, MasterBrainAgentId, MasterBrainFinalDecision,
+  MasterBrainRecommendation, MasterBrainRunReview, Qualification, ResumeDocument, ResumeSelection, Rules,
+  ScreeningAnswer, StandingFacts, Story,
 } from "../../../shared/types.js";
 import { HttpError, asyncHandler, badRequest, conflict, idParam, notFound, validate } from "../http.js";
 import { extractResumeTextFromBuffer, ALLOWED_RESUME_TYPES } from "../services/resumeParse.js";
@@ -672,6 +673,107 @@ function masterBrainRecommendations(
     });
   }
   return recommendations.slice(0, 12);
+}
+
+function reviewAgentRuns(runs: Row[], jobs: Row[], kits: Row[]): MasterBrainRunReview[] {
+  const jobsById = new Map(jobs.map(job => [numberId(job), job]));
+  const kitsByJob = new Map(kits.map(kit => [Number(kit.job_id), kit]));
+  return runs.map(run => {
+    const jobId = run.job_id == null ? null : Number(run.job_id);
+    const job = jobId == null ? undefined : jobsById.get(jobId);
+    const kit = jobId == null ? undefined : kitsByJob.get(jobId);
+    const agent = String(run.agent ?? "Specialist");
+    const successful = run.ok === true;
+    let verdict: MasterBrainRunReview["verdict"] = "needs_review";
+    let rationale = "The run record does not store enough structured output to verify this result.";
+    if (!successful) {
+      verdict = "needs_review";
+      rationale = "The specialist run failed. Review the job details and retry only if useful.";
+    } else if (/honesty|truth/i.test(agent)) {
+      const honesty = decodeJson<Record<string, unknown>>(kit?.honesty_json, {});
+      const passed = honesty.verdict === "pass" && Number(honesty.unsupportedCount ?? 0) === 0;
+      verdict = passed ? "supported" : "do_not_use";
+      rationale = passed
+        ? "The saved application kit currently passes its unsupported-claim check."
+        : "The saved kit does not currently pass its unsupported-claim check; do not use it until reviewed and corrected.";
+    } else if (/qualif/i.test(agent) && job) {
+      const qualification = decodeJson<Record<string, unknown>>(job.qualification_json, {});
+      const consistent = (qualification.qualifies === true && job.status === "qualified")
+        || (qualification.qualifies === false && job.status !== "qualified");
+      verdict = consistent ? "supported" : "needs_review";
+      rationale = consistent
+        ? "The saved qualification result and job status agree."
+        : "The saved qualification result and job status disagree or are incomplete.";
+    } else if (/jobparser|parsejob/i.test(agent) && job) {
+      verdict = job.parsed_json ? "supported" : "needs_review";
+      rationale = job.parsed_json
+        ? "Parsed job data is present in the workspace."
+        : "The job parser run succeeded, but no parsed job result is currently saved.";
+    } else if (/resumeanalyst|analyzeresume/i.test(agent)) {
+      verdict = "needs_review";
+      rationale = "The run succeeded, but structured resume analysis output is not saved in the audit trail.";
+    } else if (successful && job && /tailor|answer/i.test(agent)) {
+      const honesty = decodeJson<Record<string, unknown>>(kit?.honesty_json, {});
+      verdict = kit && honesty.verdict === "pass" && Number(honesty.unsupportedCount ?? 0) === 0
+        ? "supported"
+        : "needs_review";
+      rationale = verdict === "supported"
+        ? "The related kit exists and currently passes its unsupported-claim check."
+        : "The related kit is missing or does not yet pass its unsupported-claim check.";
+    }
+    return {
+      runId: numberId(run),
+      specialist: agent,
+      jobId,
+      jobTitle: job ? String(job.title || "Untitled role") : null,
+      runSucceeded: successful,
+      verdict,
+      rationale,
+      href: job ? `/jobs/${numberId(job)}` : null,
+    };
+  });
+}
+
+function chooseMasterDecision(
+  recommendations: MasterBrainRecommendation[],
+  reviewedDecisions: MasterBrainRunReview[],
+): MasterBrainFinalDecision {
+  const unsafeKit = reviewedDecisions.find(review => review.verdict === "do_not_use");
+  if (unsafeKit) {
+    return {
+      outcome: "hold_for_review",
+      title: "Hold this application kit for review",
+      rationale: unsafeKit.rationale,
+      evidence: [`${unsafeKit.specialist} review #${unsafeKit.runId}`, unsafeKit.jobTitle ?? "Saved kit"],
+      recommendationId: recommendations.find(item => item.agentId === "truth_guard")?.id ?? null,
+    };
+  }
+  const next = recommendations[0];
+  if (!next) {
+    return {
+      outcome: "no_action",
+      title: "No action is currently needed",
+      rationale: "No outstanding review step was found in the records the Brain can safely evaluate.",
+      evidence: [`${reviewedDecisions.length} specialist run${reviewedDecisions.length === 1 ? "" : "s"} reviewed`],
+      recommendationId: null,
+    };
+  }
+  const outcome = next.agentId === "application_strategist"
+    ? "prepare_draft"
+    : next.agentId === "role_researcher" || next.agentId === "resume_analyst"
+      ? "complete_missing_data"
+      : "hold_for_review";
+  const agentReview = reviewedDecisions.find(review => review.jobId != null && next.href === `/jobs/${review.jobId}`);
+  return {
+    outcome,
+    title: next.title,
+    rationale: next.detail,
+    evidence: [
+      `${brainAgents[next.agentId].name} recommendation`,
+      ...(agentReview ? [`Master review: ${agentReview.verdict} — ${agentReview.rationale}`] : []),
+    ],
+    recommendationId: next.id,
+  };
 }
 
 export function createHostedRouter(options: HostedOptions = {}) {
@@ -1390,13 +1492,15 @@ export function createHostedRouter(options: HostedOptions = {}) {
 
   router.get("/brain", asyncHandler(async (req, res) => {
     const ctx = context(req, res);
-    const [resumes, jobs, kits, feedback] = await Promise.all([
+    const [resumes, jobs, kits, feedback, runs] = await Promise.all([
       selectAllRows<Row>(ctx, "resumes"),
       selectAllRows<Row>(ctx, "jobs"),
       selectAllRows<Row>(ctx, "application_kits"),
       selectRows<Row>(ctx, "brain_feedback"),
+      selectRows<Row>(ctx, "agent_runs", {}, "&order=created_at.desc,id.desc&limit=50"),
     ]);
     const recommendations = masterBrainRecommendations(resumes, jobs, kits);
+    const reviewedDecisions = reviewAgentRuns(runs, jobs, kits);
     const agents = MASTER_BRAIN_AGENTS.map(id => {
       const vote = feedback.find(row => row.agent === id);
       return {
@@ -1426,6 +1530,8 @@ export function createHostedRouter(options: HostedOptions = {}) {
       learningSignals: feedback.length,
       agents,
       recommendations,
+      reviewedDecisions,
+      finalDecision: chooseMasterDecision(recommendations, reviewedDecisions),
     });
   }));
   router.put("/brain/feedback", asyncHandler(async (req, res) => {

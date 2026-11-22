@@ -592,17 +592,25 @@ function MasterBrainPage({ notify }: { notify: (message: string, kind?: ToastMes
   if (loading) return <><PageHeading eyebrow="WORKSPACE INTELLIGENCE" title="Master AI Brain" /><Loading /></>;
   if (error && !report) return <><PageHeading title="Master AI Brain" /><ErrorState message={error} retry={load} /></>;
   if (!report) return null;
+  const finalRecommendation = report.recommendations.find((item) => item.id === report.finalDecision.recommendationId);
   return <>
     <PageHeading eyebrow="WORKSPACE INTELLIGENCE" title="Master AI Brain" description="Five focused agents review your private job-search workspace and report back with evidence-based next steps." />
     {error && <div className="inline-error" role="alert">{error}</div>}
     <div className="brain-safety-note">
-      <strong>You stay in control.</strong> Specialists only inspect data in your workspace. They do not browse the web, contact employers, submit applications, change your records, or train across accounts. Feedback teaches this workspace which agents you find useful and helps prioritize future suggestions; your approval is always required for any action.
+      <strong>You stay in control.</strong> The Brain reviews recent specialist runs against saved outcomes in your private workspace and issues a final recommendation. It cannot access credentials, other users' data, browse externally, contact employers, submit applications, or change your records. Feedback helps prioritize suggestions; your approval is required for any consequential action.
     </div>
     <Panel title="Master summary" subtitle={report.summary}>
       <div className="brain-summary-row">
         <div><strong>{report.recommendations.length}</strong><span>review suggestions</span></div>
         <div><strong>{report.learningSignals}</strong><span>workspace feedback signals</span></div>
+        <div><strong>{report.reviewedDecisions.length}</strong><span>specialist runs reviewed</span></div>
         <span className="brain-updated">Updated {new Date(report.generatedAt).toLocaleString()}</span>
+      </div>
+      <div className={`brain-final-decision ${report.finalDecision.outcome}`}>
+        <div className="brain-final-heading"><span>MASTER DECISION</span><strong>{report.finalDecision.title}</strong></div>
+        <p>{report.finalDecision.rationale}</p>
+        {report.finalDecision.evidence.length > 0 && <ul>{report.finalDecision.evidence.map((item) => <li key={item}>{item}</li>)}</ul>}
+        {finalRecommendation && <Link className="button button-quiet" to={finalRecommendation.href}>Review recommended step</Link>}
       </div>
       {report.recommendations.length ? <div className="brain-recommendations">
         {report.recommendations.map((item) => {
@@ -615,6 +623,18 @@ function MasterBrainPage({ notify }: { notify: (message: string, kind?: ToastMes
           </article>;
         })}
       </div> : <EmptyState title="No follow-up needed" detail="Your specialists found no outstanding review steps in the current workspace." />}
+    </Panel>
+    <Panel title="Specialist decision review" subtitle="The Brain compares the latest 50 audit runs with saved job and application-kit evidence. Missing output is marked for review, not assumed correct.">
+      {report.reviewedDecisions.length ? <div className="brain-review-list">
+        {report.reviewedDecisions.map((review) => <article className={`brain-review-row ${review.verdict}`} key={review.runId}>
+          <div className="brain-review-main">
+            <div className="brain-review-title"><strong>{review.specialist}</strong><span className={`brain-verdict ${review.verdict}`}>{review.verdict.replaceAll("_", " ")}</span></div>
+            <span>{review.jobTitle ?? "Workspace-level run"} · run #{review.runId}</span>
+            <p>{review.rationale}</p>
+          </div>
+          {review.href && <Link className="button button-quiet" to={review.href}>Open job</Link>}
+        </article>)}
+      </div> : <EmptyState title="No specialist decisions to review" detail="Recent agent runs will appear here with a check against saved workspace evidence." />}
     </Panel>
     <Panel title="Mini agents" subtitle="Rate each specialist. These private feedback signals help the Master Brain prioritize useful guidance for you.">
       <div className="brain-agent-grid">

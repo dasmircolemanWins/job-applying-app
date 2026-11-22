@@ -166,7 +166,13 @@ per-account feedback signals help prioritize future recommendations. This is
 preference memory, not model training or cross-account learning. Agents do not
 browse the web, modify records, contact employers, or submit applications.
 Recommendations link to user-reviewed workflows; all consequential changes
-remain under the user's control.
+remain under the user's control. The Brain also reviews the latest 50
+owner-scoped agent-run records against saved job, qualification, and application
+kit outcomes, then presents one final recommendation with its evidence. When a
+run has no persisted structured result, the Brain marks it for review rather
+than treating a successful execution as proof that its decision was correct.
+The Brain reads workspace records needed for this review, never account
+credentials or data belonging to other users.
 
 The ApplyPilot Supabase project has public email sign-up enabled with email
 confirmation required. Apply every migration before deploying; hosted API,
