@@ -65,6 +65,19 @@ const adzunaResponseSchema = z.object({
   }).passthrough()),
 });
 
+const arbeitnowResponseSchema = z.object({
+  data: z.array(z.object({
+    slug: z.string().nullish(),
+    company_name: z.string().nullish(),
+    title: z.string().nullish(),
+    description: z.string().nullish(),
+    remote: z.boolean().nullish(),
+    url: z.string().nullish(),
+    tags: z.array(z.string()).nullish(),
+    location: z.string().nullish(),
+  }).passthrough()),
+});
+
 function publicHttpUrl(raw: string | null | undefined): string {
   if (!raw) return "";
   try {
@@ -115,6 +128,34 @@ async function discoverWithProvider(
   maxResults: number,
   settings: Map<string, string>,
 ): Promise<DiscoveredJob[]> {
+  if (provider === "arbeitnow") {
+    const url = new URL("https://www.arbeitnow.com/api/job-board-api");
+    const result = arbeitnowResponseSchema.safeParse(await requestSearchProvider(ctx, url, {
+      accept: "application/json",
+      "user-agent": "ApplyPilot/1.0 (job discovery; https://applypilot-kto8.onrender.com)",
+    }));
+    if (!result.success) throw new HttpError(502, "Arbeitnow returned job data in an unsupported format.");
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    const locationTerm = location.trim().toLowerCase();
+    return result.data.data
+      .filter(row => {
+        const searchable = [row.title, row.company_name, row.description, ...(row.tags ?? [])]
+          .filter(Boolean).join(" ").toLowerCase();
+        return terms.every(term => searchable.includes(term))
+          && (!locationTerm || String(row.location ?? "").toLowerCase().includes(locationTerm))
+          && (!remoteOnly || row.remote === true);
+      })
+      .slice(0, maxResults)
+      .map(row => ({
+        title: row.title?.trim() ?? "",
+        company: row.company_name?.trim() ?? "",
+        location: row.location?.trim() ?? "",
+        description: cleanJobDescription(row.description),
+        url: publicHttpUrl(row.url),
+        board: "Arbeitnow",
+      }));
+  }
+
   if (provider === "jsearch") {
     const key = settings.get("jsearch_api_key")?.trim();
     if (!key) throw badRequest("Add a JSearch RapidAPI key in Settings before searching.");
@@ -1262,9 +1303,9 @@ export function createHostedRouter(options: HostedOptions = {}) {
   router.post("/jobs/discover", asyncHandler(async (req, res) => {
     const ctx = context(req, res);
     const body = validate(req.body, z.object({
-      provider: z.enum(["jsearch", "adzuna"]),
+      provider: z.enum(["jsearch", "adzuna", "arbeitnow"]),
       query: z.string().trim().min(2).max(200),
-      location: z.string().trim().max(120).default("United States"),
+      location: z.string().trim().max(120).default(""),
       remoteOnly: z.boolean().default(false),
       maxResults: z.number().int().min(1).max(20).default(10),
     }).strict());

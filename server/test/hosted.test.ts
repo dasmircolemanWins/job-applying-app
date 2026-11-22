@@ -397,6 +397,51 @@ test("hosted job discovery normalizes Adzuna results into the private pipeline",
   assert.doesNotMatch(JSON.stringify(db.get("jobs")), /private-app-key/);
 });
 
+test("hosted Arbeitnow search works without credentials and retains provider attribution", async () => {
+  const calls: Captured[] = [];
+  const db: Db = new Map([["jobs", []]]);
+  const postgrest = fakePostgrest(calls, db);
+  const providerCalls: Captured[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === "www.arbeitnow.com") {
+      providerCalls.push({ url: url.toString(), init });
+      return new Response(JSON.stringify({ data: [
+        {
+          slug: "senior-nurse-berlin", company_name: "Health GmbH", title: "Senior Nurse",
+          description: "<p>Provide patient care in a clinical team.</p>", remote: false,
+          url: "https://www.arbeitnow.com/jobs/health/senior-nurse-berlin",
+          tags: ["Nursing"], location: "Berlin",
+        },
+        {
+          slug: "designer-munich", company_name: "Studio", title: "Product Designer",
+          description: "<p>Design digital products.</p>", remote: true,
+          url: "https://www.arbeitnow.com/jobs/studio/product-designer-munich",
+          tags: ["Design"], location: "Munich",
+        },
+      ] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return postgrest(input, init);
+  };
+  await withHostedServer(fetcher, async base => {
+    const response = await fetch(`${base}/api/jobs/discover`, {
+      method: "POST", headers: { ...requestHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ provider: "arbeitnow", query: "nurse", location: "Berlin" }),
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json() as { added: number; jobs: { title: string; board: string; url: string; descriptionText: string }[] };
+    assert.equal(result.added, 1);
+    assert.equal(result.jobs[0]?.title, "Senior Nurse");
+    assert.equal(result.jobs[0]?.board, "Arbeitnow");
+    assert.match(result.jobs[0]?.url ?? "", /^https:\/\/www\.arbeitnow\.com\/jobs\//);
+    assert.match(result.jobs[0]?.descriptionText ?? "", /patient care/);
+  });
+  assert.equal(providerCalls.length, 1);
+  assert.equal(db.get("jobs")?.[0]?.owner_id, userA);
+  assert.equal(db.get("jobs")?.[0]?.board, "Arbeitnow");
+  assert.equal(calls.some(call => new URL(call.url).pathname === "/rest/v1/settings"), true);
+});
+
 test("stored resume analysis is deterministic and persists only to its owner", async () => {
   const calls: Captured[] = [];
   const db: Db = new Map([["resumes", [{

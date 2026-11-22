@@ -440,7 +440,7 @@ export interface JobCreateInput {
 }
 
 export interface JobDiscoveryInput {
-  provider: "jsearch" | "adzuna";
+  provider: "jsearch" | "adzuna" | "arbeitnow";
   query: string;
   location?: string;
   remoteOnly?: boolean;

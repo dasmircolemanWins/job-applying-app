@@ -339,7 +339,7 @@ function JobsPage({ notify }: { notify: (message: string, kind?: ToastMessage["k
   const [emailResult, setEmailResult] = useState("");
   const [discoveryProvider, setDiscoveryProvider] = useState<JobDiscoveryInput["provider"]>("jsearch");
   const [discoveryQuery, setDiscoveryQuery] = useState("");
-  const [discoveryLocation, setDiscoveryLocation] = useState("United States");
+  const [discoveryLocation, setDiscoveryLocation] = useState("");
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [discoveryResult, setDiscoveryResult] = useState<JobDiscoveryResult | null>(null);
   const navigate = useNavigate();
@@ -412,19 +412,20 @@ function JobsPage({ notify }: { notify: (message: string, kind?: ToastMessage["k
     <PageHeading eyebrow="DISCOVER & QUALIFY" title="Job pipeline" description={`${total} roles tracked. Keep your shortlist focused on opportunities that fit.`} action={<Button onClick={emailSweep} disabled={busy}>✉ Sweep email alerts</Button>} />
     {error && <div className="inline-error">{error}<button onClick={() => setError("")}>×</button></div>}
     {emailResult && <div className="inline-success">{emailResult}<button onClick={() => setEmailResult("")}>×</button></div>}
-    <Panel title="Discover jobs across boards" subtitle="Search via licensed job-search APIs that aggregate participating sources. Configure provider credentials in Settings; availability and coverage depend on each provider.">
+    <Panel title="Discover jobs across boards" subtitle="Arbeitnow is a free, no-key source for mainly European and UK listings. JSearch and Adzuna offer broader paid/free-tier coverage when you configure their API credentials.">
       <form className="add-job-form" onSubmit={(event) => void discover(event)}>
         <select aria-label="Job search provider" value={discoveryProvider} onChange={(event) => setDiscoveryProvider(event.target.value as JobDiscoveryInput["provider"])}>
+          <option value="arbeitnow">Arbeitnow · Free, no API key · Europe/UK</option>
           <option value="jsearch">JSearch · multi-board aggregator</option>
           <option value="adzuna">Adzuna · job search API</option>
         </select>
         <input aria-label="Job title or keywords" required minLength={2} maxLength={200} placeholder="Job title or skills, e.g. Registered Nurse" value={discoveryQuery} onChange={(event) => setDiscoveryQuery(event.target.value)} />
-        <input aria-label="Job location" maxLength={120} placeholder="Location" value={discoveryLocation} onChange={(event) => setDiscoveryLocation(event.target.value)} />
+        <input aria-label="Job location" maxLength={120} placeholder={discoveryProvider === "arbeitnow" ? "Location (optional; listings mainly Europe/UK)" : "Location (optional; U.S. assumed)"} value={discoveryLocation} onChange={(event) => setDiscoveryLocation(event.target.value)} />
         <label className="toggle-line"><input type="checkbox" checked={remoteOnly} onChange={(event) => setRemoteOnly(event.target.checked)} />Remote jobs</label>
         <Button type="submit" variant="primary" disabled={busy || !discoveryQuery.trim()}>⌕ Search listings</Button>
       </form>
       {discoveryResult && <div className="inline-success" role="status">{discoveryResult.provider} found {discoveryResult.found} listings · added {discoveryResult.added} · {discoveryResult.duplicates} already saved</div>}
-      <p className="muted">Search results are saved to your private pipeline. Review each role before preparing or submitting an application. Job boards may require separate accounts or offer limited regional coverage.</p>
+      <p className="muted">Search results are saved to your private pipeline. Arbeitnow listings retain their source link and attribution. Coverage depends on provider and region; no free API guarantees access to every listing on Monster, Snagajob, ZipRecruiter, SimplyHired, or LinkedIn. Review each role before applying.</p>
     </Panel>
     <Panel title="Add a job" subtitle="Save a posting to review it with your own application rules.">
       <div className="tabs compact-tabs"><button className={addMode === "url" ? "tab active" : "tab"} onClick={() => setAddMode("url")}>Posting URL</button><button className={addMode === "paste" ? "tab active" : "tab"} onClick={() => setAddMode("paste")}>Paste description</button><button className={addMode === "bulk" ? "tab active" : "tab"} onClick={() => setAddMode("bulk")}>Bulk URLs</button></div>

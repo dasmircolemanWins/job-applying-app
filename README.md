@@ -157,11 +157,14 @@ additional boundary.
 The following workflows are **not yet available in hosted mode** and respond
 with an explicit unavailable error: bulk URL importing, automated job
 processing, API-key testing, and mailbox integration. Hosted users can search
-via JSearch (RapidAPI) or Adzuna by configuring their own provider credentials
-in Settings. JSearch aggregates listings from its participating sources; board
-coverage (which may include sites such as Monster, Snagajob, ZipRecruiter,
-SimplyHired, or LinkedIn) depends on the provider's current catalog and terms.
-ApplyPilot does not scrape those sites or bypass their access controls.
+Arbeitnow at no cost and without a key; its free public API primarily covers
+European/UK listings sourced from ATS feeds and requires us to preserve the
+job link and Arbeitnow attribution. For broader coverage, users can configure
+their own JSearch (RapidAPI) or Adzuna credentials in Settings. JSearch
+aggregates listings from its participating sources; board coverage (which may
+include sites such as Monster, Snagajob, ZipRecruiter, SimplyHired, or LinkedIn)
+depends on the provider's current catalog and terms. ApplyPilot does not scrape
+those sites or bypass their access controls.
 Hosted users can also add or refresh one public job posting URL at a time;
 fetching is limited to public HTTP(S) pages and rejects private-network
 destinations. Search results are saved to the owner's isolated job pipeline;
