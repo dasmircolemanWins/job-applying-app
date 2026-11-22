@@ -2,7 +2,6 @@ import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import { readSettingOrDefault } from "../config.js";
 import { badRequest } from "../http.js";
 
 export interface EmailSweepData {
@@ -18,12 +17,21 @@ export interface MailboxConfig {
   folder: string;
 }
 
-function mailboxConfig(config?: Partial<MailboxConfig>): MailboxConfig {
-  const host = (config?.host ?? readSettingOrDefault("imap_host")).trim();
-  const user = (config?.user ?? readSettingOrDefault("imap_user")).trim();
-  const password = config?.password ?? readSettingOrDefault("imap_password");
-  const port = config?.port ?? (Number(readSettingOrDefault("imap_port")) || 993);
-  const folder = (config?.folder ?? readSettingOrDefault("imap_folder")).trim() || "INBOX";
+async function mailboxConfig(supplied?: Partial<MailboxConfig>): Promise<MailboxConfig> {
+  const defaults = supplied
+    ? undefined
+    : await import("../config.js").then(({ readSettingOrDefault }) => ({
+      host: readSettingOrDefault("imap_host"),
+      user: readSettingOrDefault("imap_user"),
+      password: readSettingOrDefault("imap_password"),
+      port: Number(readSettingOrDefault("imap_port")) || 993,
+      folder: readSettingOrDefault("imap_folder"),
+    }));
+  const host = (supplied?.host ?? defaults?.host ?? "").trim();
+  const user = (supplied?.user ?? defaults?.user ?? "").trim();
+  const password = supplied?.password ?? defaults?.password ?? "";
+  const port = supplied?.port ?? defaults?.port ?? 993;
+  const folder = (supplied?.folder ?? defaults?.folder ?? "").trim() || "INBOX";
   const missing = [
     !host && "IMAP host",
     !user && "IMAP username",
@@ -78,8 +86,11 @@ function extractJobUrls(text: string): string[] {
   return [...new Set(urls)];
 }
 
-async function withMailbox<T>(fn: (client: ImapFlow) => Promise<T>, suppliedConfig?: Partial<MailboxConfig>): Promise<T> {
-  const config = mailboxConfig(suppliedConfig);
+async function withMailbox<T>(
+  fn: (client: ImapFlow, config: MailboxConfig) => Promise<T>,
+  suppliedConfig?: Partial<MailboxConfig>,
+): Promise<T> {
+  const config = await mailboxConfig(suppliedConfig);
   await assertPublicMailboxHost(config.host);
   const client = new ImapFlow({
     host: config.host,
@@ -93,7 +104,7 @@ async function withMailbox<T>(fn: (client: ImapFlow) => Promise<T>, suppliedConf
   });
   try {
     await client.connect();
-    return await fn(client);
+    return await fn(client, config);
   } catch {
     throw badRequest("Could not connect to the configured IMAP mailbox. Check the host, port, username, password, and TLS settings.");
   } finally {
@@ -102,8 +113,8 @@ async function withMailbox<T>(fn: (client: ImapFlow) => Promise<T>, suppliedConf
 }
 
 export async function testMailbox(config?: Partial<MailboxConfig>): Promise<{ ok: true; message: string; mailboxCount: number }> {
-  return withMailbox(async client => {
-    const lock = await client.getMailboxLock(mailboxConfig(config).folder);
+  return withMailbox(async (client, mailbox) => {
+    const lock = await client.getMailboxLock(mailbox.folder);
     try {
       const mailbox = client.mailbox;
       const count = typeof mailbox === "object" && mailbox !== null && "exists" in mailbox
@@ -116,9 +127,8 @@ export async function testMailbox(config?: Partial<MailboxConfig>): Promise<{ ok
 }
 
 export async function sweepMailbox(sinceDays: number, config?: Partial<MailboxConfig>): Promise<EmailSweepData> {
-  return withMailbox(async client => {
-    const folder = mailboxConfig(config).folder;
-    const lock = await client.getMailboxLock(folder);
+  return withMailbox(async (client, mailbox) => {
+    const lock = await client.getMailboxLock(mailbox.folder);
     try {
       const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000);
       const urls: string[] = [];
