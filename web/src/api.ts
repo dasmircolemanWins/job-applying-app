@@ -114,6 +114,7 @@ export const api = {
   deleteJob: (id: number) => request<void>(`/jobs${idPath(id)}`, { method: "DELETE" }),
   job: (id: number) => request<JobDetail>(`/jobs${idPath(id)}`),
   parseJob: (id: number) => request<Job>(`/jobs${idPath(id)}/parse`, json("POST")),
+  researchJob: (id: number) => request<Job>(`/jobs${idPath(id)}/research`, json("POST")),
   qualifyJob: (id: number) => request<Job>(`/jobs${idPath(id)}/qualify`, json("POST")),
   buildKit: (id: number) => request<ApplicationKit>(`/jobs${idPath(id)}/build-kit`, json("POST")),
   runJob: (id: number) => request<JobDetail>(`/jobs${idPath(id)}/run`, json("POST")),

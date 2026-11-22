@@ -53,11 +53,14 @@ standing facts, and approved stories. Review the honesty report and every
 generated answer; unsupported statements should not be used. Sensitive
 identity questions require your own response.
 
-Application assistance currently uses a manual handoff: open the employer's
-page yourself, complete the form, and record the application after you submit
-it. This build does not fill or submit application forms. ApplyPilot does not
-solve CAPTCHAs, bypass paywalls, or ask you to weaken account security. Respect
-each job site's terms.
+Agents can retrieve and review a public posting when you provide its URL and
+explicitly start the research action. Application assistance remains a manual
+handoff: open the employer's page yourself, complete and submit the form, and
+record the application after you submit it. Agent-prepared employer messages
+open as drafts in your email app; verify the recipient and content and press
+Send yourself. ApplyPilot does not fill or submit application forms, send
+messages in the background, solve CAPTCHAs, bypass paywalls, or ask you to
+weaken account security. Respect each job site's terms.
 
 ## Local data
 
@@ -152,8 +155,10 @@ user's token and owner scope, with PostgreSQL row-level security as an
 additional boundary.
 
 The following workflows are **not yet available in hosted mode** and respond
-with an explicit unavailable error: external web research, URL/bulk job
-importing, automated job processing, API-key testing, and mailbox integration.
+with an explicit unavailable error: bulk URL importing, automated job
+processing, API-key testing, and mailbox integration. Hosted users can add or
+refresh one public job posting URL at a time; fetching is limited to public
+HTTP(S) pages and rejects private-network destinations.
 Hosted accounts start with fresh data; there is no local resume or history
 migration/import. Resume uploads are limited to 10 per account, enforced by
 both the API and a transaction-safe PostgreSQL trigger.
@@ -163,10 +168,13 @@ resume analysis, role-evidence review, fit analysis, application planning, and
 truth checking. It analyzes only information the signed-in user has put in
 their isolated workspace. Users can rate each specialist; those explicit,
 per-account feedback signals help prioritize future recommendations. This is
-preference memory, not model training or cross-account learning. Agents do not
-browse the web, modify records, contact employers, or submit applications.
-Recommendations link to user-reviewed workflows; all consequential changes
-remain under the user's control. The Brain also reviews the latest 50
+preference memory, not model training or cross-account learning. Agents can
+retrieve a public posting URL supplied by the user when the user explicitly
+starts research. They can prepare application and employer-message drafts,
+but cannot sign into external accounts, send messages, or submit forms.
+Messages open in the user's email application and applications are submitted
+manually on the employer's site; each consequential action stays with the
+user. The Brain also reviews the latest 50
 owner-scoped agent-run records against saved job, qualification, and application
 kit outcomes, then presents one final recommendation with its evidence. When a
 run has no persisted structured result, the Brain marks it for review rather

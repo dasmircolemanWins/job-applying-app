@@ -16,6 +16,7 @@ import type {
 import { HttpError, asyncHandler, badRequest, conflict, idParam, notFound, validate } from "../http.js";
 import { extractResumeTextFromBuffer, ALLOWED_RESUME_TYPES } from "../services/resumeParse.js";
 import { renderResume } from "../services/render.js";
+import { fetchJobText } from "../services/jobFetch.js";
 import {
   deleteRows, hostedContext, hostedRequest, insertRow, selectAllRows, selectPage, selectRows, storageAuthenticatedPath,
   storageObjectPath, updateRows, type HostedContext, type HostedOptions,
@@ -1090,19 +1091,27 @@ export function createHostedRouter(options: HostedOptions = {}) {
   router.post("/jobs", asyncHandler(async (req, res) => {
     const ctx = context(req, res);
     const body = validate(req.body, createJobSchema);
-    if (body.url) throw new HttpError(503, "URL fetching and automatic job parsing are unavailable in hosted mode.");
+    const text = body.text?.trim() || (body.url ? await fetchJobText(body.url) : "");
     const title = body.title?.trim() ?? "";
     const company = body.company?.trim() ?? "";
-    const text = body.text?.trim() ?? "";
     const key = jobDedupeKey(company, title, text);
     if ((await one(ctx, "jobs", { dedupe_key: encodedEq(key) }))) throw conflict("A matching job already exists");
     const ts = now();
     const row = await insertRow<Row>(ctx, "jobs", {
-      source: "manual", url: null, title, company, location: "", remote_type: "unknown",
+      source: body.url ? "url" : "manual", url: body.url ?? null, title, company, location: "", remote_type: "unknown",
       description_text: text, ats_vendor: "unknown", posting_id: null, board: body.board ?? null,
       status: "new", status_reason: null, dedupe_key: key, found_at: ts, created_at: ts, updated_at: ts,
     });
-    res.status(201).json(jobView(row));
+    if (!body.url) {
+      res.status(201).json(jobView(row));
+      return;
+    }
+    try {
+      res.status(201).json(jobView(await parseHostedJob(ctx, numberId(row))));
+    } catch (error) {
+      await deleteRows(ctx, "jobs", { id: encodedEq(numberId(row)) });
+      throw error;
+    }
   }));
   router.post("/jobs/bulk", unavailable("Bulk URL importing"));
   router.post("/jobs/run-all", unavailable("Automated job pipeline"));
@@ -1150,6 +1159,19 @@ export function createHostedRouter(options: HostedOptions = {}) {
   }));
   router.post("/jobs/:id/parse", asyncHandler(async (req, res) => {
     res.json(jobView(await parseHostedJob(context(req, res), idParam(req.params.id))));
+  }));
+  router.post("/jobs/:id/research", asyncHandler(async (req, res) => {
+    const ctx = context(req, res);
+    const id = idParam(req.params.id);
+    const current = await required(ctx, "jobs", { id: encodedEq(id) }, "Job");
+    const url = String(current.url ?? "").trim();
+    if (!url) throw badRequest("Add a public job posting URL before researching this role.");
+    const description = await fetchJobText(url);
+    await updateRows(ctx, "jobs", { id: encodedEq(id) }, {
+      description_text: description, parsed_json: null, qualification_json: null, fit_score: null,
+      status: "new", status_reason: null, updated_at: now(),
+    });
+    res.json(jobView(await parseHostedJob(ctx, id)));
   }));
   router.post("/jobs/:id/qualify", asyncHandler(async (req, res) => {
     res.json(jobView(await qualifyHostedJob(context(req, res), idParam(req.params.id))));

@@ -256,6 +256,38 @@ test("hosted job creation and parsing are owner-scoped while automation remains 
     new URL(lookup!.url).searchParams.get("owner_id") === `eq.${userB}`);
 });
 
+test("hosted posting research is user-triggered, owner-isolated, and rejects private network URLs", async () => {
+  const calls: Captured[] = [];
+  const db: Db = new Map([["jobs", [{
+    id: 7, owner_id: userA, source: "url", url: "http://127.0.0.1/private",
+    title: "Engineer", company: "Example", description_text: "Saved description",
+  }]]]);
+  await withHostedServer(fakePostgrest(calls, db), async base => {
+    const hidden = await fetch(`${base}/api/jobs/7/research`, {
+      method: "POST", headers: requestHeaders("token-b"),
+    });
+    assert.equal(hidden.status, 404);
+
+    const blockedResearch = await fetch(`${base}/api/jobs/7/research`, {
+      method: "POST", headers: requestHeaders(),
+    });
+    assert.equal(blockedResearch.status, 400);
+    assert.match((await blockedResearch.json() as { error: string }).error, /public host/i);
+
+    const blockedAdd = await fetch(`${base}/api/jobs`, {
+      method: "POST", headers: { ...requestHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ url: "http://127.0.0.1/private" }),
+    });
+    assert.equal(blockedAdd.status, 400);
+    assert.match((await blockedAdd.json() as { error: string }).error, /public host/i);
+  });
+  assert.equal(db.get("jobs")?.length, 1);
+  assert.equal(db.get("jobs")?.[0]?.description_text, "Saved description");
+  assert.ok(calls.filter(call => new URL(call.url).pathname === "/rest/v1/jobs").every(call =>
+    new URL(call.url).searchParams.get("owner_id") === `eq.${userA}` ||
+    new URL(call.url).searchParams.get("owner_id") === `eq.${userB}`));
+});
+
 test("stored resume analysis is deterministic and persists only to its owner", async () => {
   const calls: Captured[] = [];
   const db: Db = new Map([["resumes", [{

@@ -457,7 +457,7 @@ function JobPage({ notify }: { notify: (message: string, kind?: ToastMessage["ki
     {error && <div className="inline-error">{error}<button onClick={() => setError("")}>×</button></div>}
     <div className="detail-layout">
       <div className="detail-main">
-        <Panel title="Role overview" subtitle="Posting details and requirements">
+        <Panel title="Role overview" subtitle="Posting details and requirements" action={job.url && <Button disabled={busy} onClick={() => void act(() => api.researchJob(id), "Public posting refreshed and reviewed")}>↻ Research public posting</Button>}>
           {parsed ? <><div className="fact-grid"><div><span>Remote type</span><strong>{parsed.remoteType}</strong></div><div><span>Seniority</span><strong>{parsed.seniority || "—"}</strong></div><div><span>Employment</span><strong>{parsed.employmentType || "—"}</strong></div><div><span>Pay range</span><strong>{parsed.payMin ? `${parsed.payCurrency ?? "USD"} ${parsed.payMin.toLocaleString()}${parsed.payMax ? `–${parsed.payMax.toLocaleString()}` : ""}` : "Not listed"}</strong></div></div><h3>Required skills</h3><div className="skill-chips">{parsed.requiredSkills.map((skill) => <span key={skill} className="chip">{skill}</span>)}</div><h3>Responsibilities</h3><ul className="bullet-list">{parsed.responsibilities.map((item, i) => <li key={i}>{item}</li>)}</ul><details className="description-details"><summary>Full job description</summary><p>{job.descriptionText}</p></details></> : <><p className="muted">This role has not been parsed yet.</p><pre className="job-description">{job.descriptionText}</pre></>}
         </Panel>
         {job.qualification && <Panel title="Qualification" subtitle="Fit against your profile and hard rules"><div className="qual-score"><strong>{job.qualification.fitScore}<small>/100</small></strong><div><StatusPill value={job.qualification.qualifies ? "qualified" : "skipped"} /><span>Fit score</span></div></div>{job.qualification.blockers.length > 0 && <div className="warning-box"><strong>Hard rule blockers</strong>{job.qualification.blockers.map((item, i) => <div key={i}>× {item}</div>)}</div>}<div className="two-lists"><div><h3>Why it fits</h3>{job.qualification.reasons.map((item, i) => <p className="evidence-line" key={i}>✓ {item}</p>)}</div><div><h3>Skill gaps</h3>{job.qualification.gaps.map((item, i) => <p className="evidence-line muted" key={i}>○ {item}</p>)}</div></div></Panel>}
@@ -484,6 +484,8 @@ function ApplyPage({ notify }: { notify: (message: string, kind?: ToastMessage["
   const id = Number(idParam);
   const [session, setSession] = useState<AssistSession | null>(null);
   const [detail, setDetail] = useState<JobDetail | null>(null);
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactMessage, setContactMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -493,6 +495,7 @@ function ApplyPage({ notify }: { notify: (message: string, kind?: ToastMessage["
     Promise.all([api.assistStatus(), api.assist(id), api.job(id)]).then(([, value, job]) => {
       setSession(value);
       setDetail(job);
+      setContactMessage(job.kit?.coverLetter ?? `Hello,\n\nI am interested in the ${job.job.title || "open"} position at ${job.job.company || "your company"}. I have prepared application materials and would welcome the opportunity to discuss my background.\n\nBest,\n${job.kit?.tailored?.contact.name || ""}`);
     }).catch((e: Error) => setError(e.message)).finally(() => setLoading(false));
   }, [id]);
   useEffect(load, [load]);
@@ -510,10 +513,29 @@ function ApplyPage({ notify }: { notify: (message: string, kind?: ToastMessage["
   if (loading) return <Loading />;
   if (error && !session) return <ErrorState message={error} retry={load} />;
   if (!detail) return <Loading />;
+  const contactHref = `mailto:${encodeURIComponent(contactEmail.trim())}?${new URLSearchParams({
+    subject: `Application inquiry: ${detail.job.title || "open position"}${detail.job.company ? ` at ${detail.job.company}` : ""}`,
+    body: contactMessage,
+  }).toString()}`;
   return <>
     <div className="back-link"><Link to={`/jobs/${id}`}>← Back to job</Link><span>APPLICATION ASSIST</span></div>
-    <PageHeading eyebrow={`JOB #${id}`} title="Human-guided application" description="Open the employer’s page yourself and record your application only after you submit it there." action={session && <StatusPill value={session.status} />} />
+    <PageHeading eyebrow={`JOB #${id}`} title="Human-guided application" description="Review agent-prepared materials, then submit on the employer’s site yourself." action={session && <StatusPill value={session.status} />} />
     {error && <div className="inline-error">{error}<button onClick={() => setError("")}>×</button></div>}
+    <Panel title="Contact the employer" subtitle="The agents can prepare a message from your reviewed application materials. You choose the recipient, review the draft, and send it from your own email app.">
+      <div className="human-review-callout"><span>✉</span><div><strong>Nothing is sent in the background</strong><p>Opening the draft shares nothing with ApplyPilot. Verify the recipient and message in your email app before you press Send.</p></div></div>
+      <form className="contact-draft-form" onSubmit={(event) => {
+        event.preventDefault();
+        if (window.confirm(`Open an email draft to ${contactEmail}? Review it in your email app; it will not be sent until you press Send there.`)) {
+          window.location.assign(contactHref);
+        }
+      }}>
+        <div className="form-grid">
+          <Field label="Employer email"><input type="email" required autoComplete="email" value={contactEmail} onChange={(event) => setContactEmail(event.target.value)} placeholder="Hiring contact email" /></Field>
+          <Field label="Message draft"><textarea required rows={7} value={contactMessage} onChange={(event) => setContactMessage(event.target.value)} /></Field>
+        </div>
+        <Button type="submit" variant="primary">Review email draft</Button>
+      </form>
+    </Panel>
     {!session && <Panel title="Manual application handoff" subtitle="Open the employer’s application page yourself. ApplyPilot will keep your review and submission record here, without interacting with the site."><div className="human-review-callout"><span>◉</span><div><strong>You stay in control</strong><p>No form is filled or submitted by ApplyPilot. You sign in, complete the application, and solve any CAPTCHA yourself.</p></div></div><div className="button-group"><Button variant="primary" disabled={busy} onClick={() => void act(() => api.startAssist(id), "Manual review session started")}>Start review session</Button>{detail.job.url && <a className="button button-secondary" href={detail.job.url} target="_blank" rel="noreferrer">Open job application ↗</a>}</div></Panel>}
     {session && <div className="assist-grid">
       <Panel title="Review timeline" subtitle="Manual application progress"><div className="timeline">{["ready_for_review", "submitted"].map((status, index) => { const isCurrent = status === session.status; const reached = session.status === "submitted" || isCurrent; return <div className={`timeline-row${reached ? " reached" : ""}${isCurrent ? " current" : ""}`} key={status}><span>{reached ? "✓" : index + 1}</span><div><strong>{status.replaceAll("_", " ")}</strong><small>{index === 0 ? "Complete and submit the application on the employer’s site, then confirm below." : "Recorded after your confirmation."}</small></div></div>; })}</div></Panel>
@@ -597,7 +619,7 @@ function MasterBrainPage({ notify }: { notify: (message: string, kind?: ToastMes
     <PageHeading eyebrow="WORKSPACE INTELLIGENCE" title="Master AI Brain" description="Five focused agents review your private job-search workspace and report back with evidence-based next steps." />
     {error && <div className="inline-error" role="alert">{error}</div>}
     <div className="brain-safety-note">
-      <strong>You stay in control.</strong> The Brain reviews recent specialist runs against saved outcomes in your private workspace and issues a final recommendation. It cannot access credentials, other users' data, browse externally, contact employers, submit applications, or change your records. Feedback helps prioritize suggestions; your approval is required for any consequential action.
+      <strong>You stay in control.</strong> The Brain reviews recent specialist runs against saved outcomes in your private workspace and issues a final recommendation. Specialists can research public job URLs that you provide when you explicitly start a research action, and prepare email/application drafts. They cannot access credentials or other users' data; sending a message or submitting an application always remains your explicit action.
     </div>
     <Panel title="Master summary" subtitle={report.summary}>
       <div className="brain-summary-row">
@@ -684,9 +706,9 @@ function SettingsPage({ notify }: { notify: (message: string, kind?: ToastMessag
     <form onSubmit={save}>
       <Panel title="AI connection" subtitle="Credentials are write-only and are never displayed in full.">
         <div className="form-grid"><Field label="Anthropic API key" hint={settings.hasApiKey ? `Saved: ${settings.anthropicApiKeyMasked || "configured"} · source: ${settings.apiKeySource}` : "No key configured"} className="col-span-2"><input type="password" autoComplete="new-password" placeholder={settings.hasApiKey ? "Enter a new key to replace the saved key" : "sk-ant-…"} value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></Field><Field label="Model"><input value={settings.model} onChange={(e) => update("model", e.target.value)} /></Field><Field label="Reasoning effort"><select value={settings.effort} onChange={(e) => update("effort", e.target.value as Settings["effort"])}>{["low", "medium", "high", "max"].map((value) => <option key={value}>{value}</option>)}</select></Field><Field label="Mock mode"><select value={settings.mockMode} onChange={(e) => update("mockMode", e.target.value as Settings["mockMode"])}><option value="auto">Auto</option><option value="on">Always on</option><option value="off">Always live</option></select></Field><Field label="Daily target"><input type="number" min="1" value={settings.dailyTarget} onChange={(e) => update("dailyTarget", Number(e.target.value))} /></Field></div><div className="panel-footer"><Button disabled={action.busy} onClick={testKey}>Test API key</Button><Button variant="primary" type="submit" disabled={action.busy}>Save settings</Button></div><div className="info-line"><span>✦</span>{settings.mockActive ? "Mock mode is active. No model API calls are made; the local deterministic workflow is available." : "Live mode is active. AI agent requests use your configured API key."}</div></Panel>
-      <Panel title="Submission safeguards" subtitle="ApplyPilot prepares applications but leaves the decision and submission to you."><div className="safety-box"><strong>Human review stays in the loop</strong><p>This build does not fill or submit application forms. Open the job site yourself and complete the application there. ApplyPilot never solves CAPTCHAs, bypasses sign-in, or asks you to lower account security.</p><label className="toggle-line"><input type="checkbox" checked={settings.autoSubmit} onChange={(e) => update("autoSubmit", e.target.checked)} />Auto-submit preference (reserved; not used in this build)</label><small>All submissions require your manual action on the employer’s site and your confirmation in ApplyPilot.</small></div></Panel>
+      <Panel title="Agent actions & submission safeguards" subtitle="Agents can research public posting URLs you provide and prepare application or email drafts."><div className="safety-box"><strong>You approve every external action</strong><p>Agents retrieve only public job pages when you explicitly start research. They cannot sign in, solve CAPTCHAs, or bypass a site's controls. Employer emails open as drafts in your email app and are sent only if you press Send. To apply, open the employer's site, review and submit the form yourself, then confirm it here.</p><small>The legacy auto-submit preference is not used. No message or application is sent in the background.</small></div></Panel>
       <Panel title="Email job alerts" subtitle="IMAP connects using TLS. Use an app password; never lower your email account security."><div className="form-grid"><Field label="IMAP host"><input value={settings.imapHost} onChange={(e) => update("imapHost", e.target.value)} placeholder="imap.gmail.com" /></Field><Field label="TLS port"><input type="number" value={settings.imapPort} onChange={(e) => update("imapPort", Number(e.target.value))} /></Field><Field label="Username"><input value={settings.imapUser} onChange={(e) => update("imapUser", e.target.value)} /></Field><Field label="App password" hint={settings.imapPasswordSet ? "A password is already saved" : "Write-only credential"}><input type="password" autoComplete="new-password" value={imapPassword} onChange={(e) => setImapPassword(e.target.value)} placeholder={settings.imapPasswordSet ? "Enter a new password to replace" : "App password"} /></Field><Field label="Folder"><input value={settings.imapFolder} onChange={(e) => update("imapFolder", e.target.value)} /></Field></div><div className="panel-footer"><Button disabled={action.busy} onClick={testEmail}>Test mailbox</Button><span className="muted">For Gmail, create an App Password with 2-Step Verification enabled.</span></div></Panel>
-      <Panel title="Browser & data" subtitle="Form automation is not enabled in this build; applying is manual."><div className="settings-list"><div><span>Chromium available</span><StatusPill value={settings.browserInstalled ? "installed" : "not installed"} /></div><div><span>Local data folder</span><code className="path-code">{settings.dataDir || "Not reported"}</code></div><div><span>Current agent mode</span><StatusPill value={settings.mockActive ? "mock active" : "live"} /></div></div></Panel>
+      <Panel title="Browser & data" subtitle="External application sites open in your browser; agents do not control login sessions or application forms."><div className="settings-list"><div><span>Chromium available</span><StatusPill value={settings.browserInstalled ? "installed" : "not installed"} /></div><div><span>Local data folder</span><code className="path-code">{settings.dataDir || "Not reported"}</code></div><div><span>Current agent mode</span><StatusPill value={settings.mockActive ? "mock active" : "live"} /></div></div></Panel>
     </form>
   </>;
 }

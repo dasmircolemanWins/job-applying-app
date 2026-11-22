@@ -162,7 +162,7 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
       <p>Authentication is active for <strong>{session.user.email ?? "your account"}</strong>.</p>
       <div className="hosted-warning">
         <strong>Hosted workflow availability</strong>
-        <p>The Master AI Brain, profile, rules, resume analysis, manual job parsing and qualification, tailored application kits, screening answers, and account export/deletion are available. External web research, automated job processing, mailbox integration, and API-key testing are not yet available.</p>
+        <p>The Master AI Brain, profile, rules, resume analysis, manual job parsing and qualification, public posting URL research, tailored application kits, screening answers, and account export/deletion are available. Bulk URL importing, automated job processing, mailbox integration, and API-key testing are not yet available.</p>
         <p>Account deletion requires a server-only Supabase admin key. Your local SQLite data is never exposed to hosted accounts.</p>
       </div>
       {error && <p className="hosted-error" role="alert">{error}</p>}
