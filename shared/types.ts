@@ -770,6 +770,41 @@ export interface AgentRun {
   createdAt: string;
 }
 
+export const MASTER_BRAIN_AGENTS = [
+  "resume_analyst",
+  "role_researcher",
+  "fit_analyst",
+  "application_strategist",
+  "truth_guard",
+] as const;
+export type MasterBrainAgentId = (typeof MASTER_BRAIN_AGENTS)[number];
+
+export interface MasterBrainAgent {
+  id: MasterBrainAgentId;
+  name: string;
+  focus: string;
+  helpfulVotes: number;
+  notHelpfulVotes: number;
+  userRating: boolean | null;
+}
+
+export interface MasterBrainRecommendation {
+  id: string;
+  agentId: MasterBrainAgentId;
+  title: string;
+  detail: string;
+  href: string;
+  priority: "high" | "normal";
+}
+
+export interface MasterBrainReport {
+  generatedAt: string;
+  summary: string;
+  learningSignals: number;
+  agents: MasterBrainAgent[];
+  recommendations: MasterBrainRecommendation[];
+}
+
 export interface LedgerResponse {
   items: Application[];
   total: number;

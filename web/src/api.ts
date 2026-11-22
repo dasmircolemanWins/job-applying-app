@@ -1,7 +1,8 @@
 import type {
   AgentRun, Application, ApplicationKit, AssistSession, AssistStatusResponse, BlockedItem,
   BulkAddResult, DashboardData, DailyReport, ExperienceBank, IntakeSuggestion, Job, JobCreateInput,
-  JobDetail, JobListResponse, JobStatus, KitUpdate, LedgerResponse, ParkedItem, ParkInput,
+  JobDetail, JobListResponse, JobStatus, KitUpdate, LedgerResponse, MasterBrainAgentId,
+  MasterBrainReport, ParkedItem, ParkInput,
   Resume, ResumeSummary, ResumeUpdate, RunStatus, ScreeningAnswer, Settings, SettingsUpdate, StandingFacts,
   Rules, Story, StoryUpdate, TestKeyResult, WeeklyReport,
 } from "../../shared/types";
@@ -71,6 +72,12 @@ const idPath = (id: number) => `/${id}`;
 
 export const api = {
   deleteAccount: () => request<{ deleted: boolean }>("/account", { method: "DELETE" }),
+  masterBrain: () => request<MasterBrainReport>("/brain"),
+  rateBrainAgent: (agentId: MasterBrainAgentId, helpful: boolean) =>
+    request<{ agentId: MasterBrainAgentId; helpful: boolean; learned: boolean }>(
+      "/brain/feedback",
+      json("PUT", { agentId, helpful }),
+    ),
   dashboard: () => request<DashboardData>("/dashboard"),
   report: () => request<DailyReport>("/reports/today"),
   weekly: () => request<WeeklyReport>("/reports/weekly"),

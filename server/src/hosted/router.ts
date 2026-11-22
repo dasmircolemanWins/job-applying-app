@@ -6,11 +6,11 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import {
   DEFAULT_DAILY_TARGET, DEFAULT_EFFORT, DEFAULT_MODEL, DEFAULT_RULES, DEFAULT_STANDING_FACTS,
-  EFFORT_LEVELS, JOB_STATUSES, MAX_RESUMES, MAX_UPLOAD_BYTES, MOCK_MODES,
+  EFFORT_LEVELS, JOB_STATUSES, MASTER_BRAIN_AGENTS, MAX_RESUMES, MAX_UPLOAD_BYTES, MOCK_MODES,
 } from "../../../shared/types.js";
 import type {
-  ApplicationRoute, ExperienceBank, JobPosting, JobStatus, Qualification, ResumeDocument,
-  ResumeSelection, Rules, ScreeningAnswer, StandingFacts, Story,
+  ApplicationRoute, ExperienceBank, JobPosting, JobStatus, MasterBrainAgentId, MasterBrainRecommendation,
+  Qualification, ResumeDocument, ResumeSelection, Rules, ScreeningAnswer, StandingFacts, Story,
 } from "../../../shared/types.js";
 import { HttpError, asyncHandler, badRequest, conflict, idParam, notFound, validate } from "../http.js";
 import { extractResumeTextFromBuffer, ALLOWED_RESUME_TYPES } from "../services/resumeParse.js";
@@ -601,6 +601,79 @@ function filesFrom(req: Request): Express.Multer.File[] {
   return fields ? Object.values(fields).flat() : [];
 }
 
+const brainAgents: Record<MasterBrainAgentId, { name: string; focus: string }> = {
+  resume_analyst: { name: "Resume Analyst", focus: "Finds resumes that need structured analysis." },
+  role_researcher: { name: "Role Researcher", focus: "Reviews job evidence supplied to your workspace; it does not browse external sites." },
+  fit_analyst: { name: "Fit Analyst", focus: "Checks parsed roles that have not yet been compared with your profile." },
+  application_strategist: { name: "Application Strategist", focus: "Finds qualified roles that are ready for a human-reviewed kit." },
+  truth_guard: { name: "Truth Guard", focus: "Flags application kits with unsupported claims for your review." },
+};
+
+function masterBrainRecommendations(
+  resumes: Row[],
+  jobs: Row[],
+  kits: Row[],
+): MasterBrainRecommendation[] {
+  const recommendations: MasterBrainRecommendation[] = [];
+  for (const resume of resumes.filter(row => !row.parsed_json).slice(0, 3)) {
+    recommendations.push({
+      id: `resume-${numberId(resume)}`,
+      agentId: "resume_analyst",
+      title: `Analyze ${String(resume.original_name ?? "uploaded resume")}`,
+      detail: "Extract its experience and skills into a reviewable structured draft.",
+      href: "/resumes",
+      priority: "normal",
+    });
+  }
+  for (const job of jobs.filter(row => !row.parsed_json || !String(row.description_text ?? "").trim()).slice(0, 3)) {
+    const missingDescription = !String(job.description_text ?? "").trim();
+    recommendations.push({
+      id: `role-${numberId(job)}`,
+      agentId: "role_researcher",
+      title: missingDescription ? `Add role evidence for ${String(job.title || "this role")}` : `Review ${String(job.title || "this role")}`,
+      detail: missingDescription
+        ? "Add the job description yourself. The agent only analyzes material you provide."
+        : "Parse the job details you supplied before comparing requirements.",
+      href: `/jobs/${numberId(job)}`,
+      priority: "normal",
+    });
+  }
+  for (const job of jobs.filter(row => row.parsed_json && !row.qualification_json).slice(0, 3)) {
+    recommendations.push({
+      id: `fit-${numberId(job)}`,
+      agentId: "fit_analyst",
+      title: `Check fit for ${String(job.title || "this role")}`,
+      detail: "Compare its parsed requirements with your saved profile and application rules.",
+      href: `/jobs/${numberId(job)}`,
+      priority: "normal",
+    });
+  }
+  const kitJobs = new Set(kits.map(row => Number(row.job_id)));
+  for (const job of jobs.filter(row => row.status === "qualified" && !kitJobs.has(numberId(row))).slice(0, 3)) {
+    recommendations.push({
+      id: `kit-${numberId(job)}`,
+      agentId: "application_strategist",
+      title: `Prepare a draft for ${String(job.title || "this role")}`,
+      detail: "Build a tailored kit for you to review; nothing is sent to an employer.",
+      href: `/jobs/${numberId(job)}`,
+      priority: "normal",
+    });
+  }
+  for (const kit of kits) {
+    const honesty = decodeJson<Record<string, unknown>>(kit.honesty_json, {});
+    if (honesty.verdict === "pass" && Number(honesty.unsupportedCount ?? 0) === 0) continue;
+    recommendations.push({
+      id: `truth-${numberId(kit)}`,
+      agentId: "truth_guard",
+      title: "Review claims in a draft application kit",
+      detail: "A kit has missing or unsupported-claim checks. Review the source resume before using it.",
+      href: `/jobs/${Number(kit.job_id)}`,
+      priority: "high",
+    });
+  }
+  return recommendations.slice(0, 12);
+}
+
 export function createHostedRouter(options: HostedOptions = {}) {
   const router = Router();
   const context = (req: Request, res: Response) => hostedContext(req, res, options);
@@ -628,13 +701,21 @@ export function createHostedRouter(options: HostedOptions = {}) {
         });
         ready = await limits.json() === true;
       }
+      if (ready) {
+        const brain = await hostedRequest(ctx, "/rest/v1/rpc/applypilot_master_brain_ready", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+        ready = await brain.json() === true;
+      }
     } catch {
       ready = false;
     }
     if (!ready) {
       throw new HttpError(
         503,
-        "Hosted workspace is unavailable. Apply the current Supabase migration and verify its owner RLS and private-storage policies.",
+        "Hosted workspace is unavailable. Apply all current Supabase migrations and verify their owner RLS and private-storage policies.",
       );
     }
     readyUntil.set(ctx.base, Date.now() + 30_000);
@@ -1305,6 +1386,68 @@ export function createHostedRouter(options: HostedOptions = {}) {
       notes: `${notes}${notes ? "\n" : ""}Interview received`, updated_at: now(),
     });
     res.json({ ok: true });
+  }));
+
+  router.get("/brain", asyncHandler(async (req, res) => {
+    const ctx = context(req, res);
+    const [resumes, jobs, kits, feedback] = await Promise.all([
+      selectAllRows<Row>(ctx, "resumes"),
+      selectAllRows<Row>(ctx, "jobs"),
+      selectAllRows<Row>(ctx, "application_kits"),
+      selectRows<Row>(ctx, "brain_feedback"),
+    ]);
+    const recommendations = masterBrainRecommendations(resumes, jobs, kits);
+    const agents = MASTER_BRAIN_AGENTS.map(id => {
+      const vote = feedback.find(row => row.agent === id);
+      return {
+        id,
+        ...brainAgents[id],
+        helpfulVotes: vote?.helpful === true ? 1 : 0,
+        notHelpfulVotes: vote?.helpful === false ? 1 : 0,
+        userRating: typeof vote?.helpful === "boolean" ? vote.helpful : null,
+      };
+    });
+    const agentRank = new Map(agents.map((agent, index) => [
+      agent.id,
+      { index, score: agent.helpfulVotes - agent.notHelpfulVotes },
+    ]));
+    recommendations.sort((left, right) => {
+      const priority = Number(right.priority === "high") - Number(left.priority === "high");
+      if (priority) return priority;
+      const leftRank = agentRank.get(left.agentId)!;
+      const rightRank = agentRank.get(right.agentId)!;
+      return rightRank.score - leftRank.score || leftRank.index - rightRank.index;
+    });
+    const roleCount = jobs.length;
+    const resumeCount = resumes.length;
+    res.json({
+      generatedAt: now(),
+      summary: `Reviewed ${resumeCount} resume${resumeCount === 1 ? "" : "s"} and ${roleCount} role${roleCount === 1 ? "" : "s"} from your private workspace.`,
+      learningSignals: feedback.length,
+      agents,
+      recommendations,
+    });
+  }));
+  router.put("/brain/feedback", asyncHandler(async (req, res) => {
+    const ctx = context(req, res);
+    const { agentId, helpful } = validate(req.body, z.object({
+      agentId: z.enum(MASTER_BRAIN_AGENTS),
+      helpful: z.boolean(),
+    }).strict());
+    const response = await hostedRequest(ctx, "/rest/v1/brain_feedback?on_conflict=owner_id%2Cagent&select=*", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        Prefer: "resolution=merge-duplicates,return=representation",
+      },
+      body: JSON.stringify({ owner_id: ctx.ownerId, agent: agentId, helpful, updated_at: now() }),
+    });
+    const rows: unknown = await response.json();
+    if (!Array.isArray(rows) || !rows[0] || typeof rows[0] !== "object") {
+      throw new HttpError(503, "Hosted data service returned an invalid feedback response.");
+    }
+    res.json({ agentId, helpful, learned: true });
   }));
 
   router.get("/agent-runs", asyncHandler(async (req, res) => {

@@ -104,13 +104,18 @@ privacy policy, and account-deletion flow are configured and tested.
 `render.yaml` describes one Render web service for the website and API. To
 create it:
 
-1. Create a Supabase project. Turn off public user sign-ups in Supabase Auth;
-   sign-up is intentionally unavailable in this build; provision accounts
-   through Supabase Auth.
-2. Apply `supabase/migrations/202610210001_hosted_workspace.sql` to the new
+1. Create a Supabase project. In **Authentication → Sign In / Providers**,
+   enable **Allow new users to sign up** and keep **Confirm email** enabled.
+   The hosted sign-in page supports both sign-up and sign-in; users must verify
+   their email before using a new account.
+2. Apply all SQL migrations in `supabase/migrations/` in filename order,
+   including `202610210001_hosted_workspace.sql`,
+   `202611220001_resume_limit.sql`, and `202611230001_master_brain.sql`, to the new
    project's database before deploying. It creates per-user data tables, enables
    and forces row-level security, and provisions a private `user-files` bucket
-   with user-folder policies. Do not expose the bucket publicly.
+   with user-folder policies. Do not expose the bucket publicly. The later
+   migrations enforce workspace limits and add private specialist-feedback
+   memory.
 3. In Render, choose **New + → Blueprint** and connect this GitHub repository.
    Provide the Supabase URL and public anon key for both server and browser
    variables (`SUPABASE_*` and `VITE_SUPABASE_*`).
@@ -147,23 +152,31 @@ user's token and owner scope, with PostgreSQL row-level security as an
 additional boundary.
 
 The following workflows are **not yet available in hosted mode** and respond
-with an explicit unavailable error: URL/bulk job importing, automated job
-processing, API-key testing, and mailbox integration. Hosted accounts start
-with fresh data; there is no local resume or history migration/import. Resume
-uploads are limited to 10 per account, enforced by both the API and a
-transaction-safe PostgreSQL trigger.
+with an explicit unavailable error: external web research, URL/bulk job
+importing, automated job processing, API-key testing, and mailbox integration.
+Hosted accounts start with fresh data; there is no local resume or history
+migration/import. Resume uploads are limited to 10 per account, enforced by
+both the API and a transaction-safe PostgreSQL trigger.
 
-The initial Supabase migration and readiness check have been applied in the
-existing ApplyPilot project. Apply all migrations, including the resume-limit
-migration, before deploying this version; the API fails closed if either
-readiness check fails. The Render service is configured on the free plan, but
-the current hosted implementation must be pushed and deployed before it is
-ready for users. Verify the live health endpoint reports
+The **Master AI Brain** coordinates five focused, read-only specialists:
+resume analysis, role-evidence review, fit analysis, application planning, and
+truth checking. It analyzes only information the signed-in user has put in
+their isolated workspace. Users can rate each specialist; those explicit,
+per-account feedback signals help prioritize future recommendations. This is
+preference memory, not model training or cross-account learning. Agents do not
+browse the web, modify records, contact employers, or submit applications.
+Recommendations link to user-reviewed workflows; all consequential changes
+remain under the user's control.
+
+The ApplyPilot Supabase project has public email sign-up enabled with email
+confirmation required. Apply every migration before deploying; hosted API,
+account export/deletion, and Master Brain requests fail closed if readiness
+checks do not pass. Render is configured on the free plan and auto-deploys from
+`main`. Verify the live health endpoint reports
 `dataApi: supabase-user-isolated`, then complete authenticated workspace and
-account-deletion smoke tests. After HTTPS deployment, users can install the
-web app from iPhone Safari using **Share → Add to Home Screen**. Native iOS
-distribution still requires macOS, Xcode, Apple signing, and App Store Connect
-configuration.
+account-deletion smoke tests. On iPhone, install the HTTPS PWA from Safari with
+**Share → Add to Home Screen**. Native iOS distribution still requires macOS,
+Xcode, Apple signing, and App Store Connect configuration.
 
 ## Development checks
 

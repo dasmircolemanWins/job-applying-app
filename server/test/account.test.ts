@@ -52,7 +52,7 @@ test("account export includes user-isolated rows and private files in a no-store
   const fetcher: typeof fetch = async (input, init) => {
     const url = String(input);
     requests.push({ url, init });
-    if (url.endsWith("/rest/v1/rpc/applypilot_workspace_ready")) return new Response("true", { status: 200 });
+    if (url.includes("/rest/v1/rpc/")) return new Response("true", { status: 200 });
     if (url.endsWith("/storage/v1/object/list/user-files")) {
       const body = JSON.parse(String(init?.body)) as { prefix: string };
       return new Response(JSON.stringify(listReply(body.prefix)), { status: 200 });
@@ -84,6 +84,8 @@ test("account export includes user-isolated rows and private files in a no-store
   assert.ok(requests.filter(({ url }) => url.includes("/rest/v1/") && !url.includes("/rpc/"))
     .every(({ url }) => new URL(url).searchParams.get("owner_id") === `eq.${userId}`));
   assert.ok(requests.some(({ url }) => url.endsWith("/rest/v1/rpc/applypilot_workspace_ready")));
+  assert.ok(requests.some(({ url }) => url.endsWith("/rest/v1/rpc/applypilot_hosted_constraints_ready")));
+  assert.ok(requests.some(({ url }) => url.endsWith("/rest/v1/rpc/applypilot_master_brain_ready")));
   assert.ok(requests.some(({ url }) =>
     url.endsWith(`${userId}/resumes/source.txt`) &&
     url.includes("/storage/v1/object/authenticated/user-files/"),
@@ -110,7 +112,7 @@ test("account deletion removes only the authenticated user's storage and rows be
   const fetcher: typeof fetch = async (input, init) => {
     const url = String(input);
     calls.push({ url, init });
-    if (url.endsWith("/rest/v1/rpc/applypilot_workspace_ready")) return new Response("true", { status: 200 });
+    if (url.includes("/rest/v1/rpc/")) return new Response("true", { status: 200 });
     if (url.endsWith("/storage/v1/object/list/user-files")) {
       const body = JSON.parse(String(init?.body)) as { prefix: string };
       return new Response(JSON.stringify(listReply(body.prefix)), { status: 200 });
@@ -131,6 +133,7 @@ test("account deletion removes only the authenticated user's storage and rows be
   const rowDeletes = calls.filter(({ url, init }) => url.includes("/rest/v1/") && init?.method === "DELETE");
   assert.ok(rowDeletes.length > 0);
   assert.ok(rowDeletes.every(({ url }) => url.includes(`owner_id=eq.${userId}`)));
+  assert.ok(rowDeletes.some(({ url }) => url.includes("/rest/v1/brain_feedback?")));
   const storageDelete = calls.find(({ url, init }) => url.endsWith("/storage/v1/object/user-files") && init?.method === "DELETE");
   assert.ok(storageDelete);
   assert.deepEqual(JSON.parse(String(storageDelete.init?.body)), { prefixes: [`${userId}/resumes/source.txt`] });
@@ -155,7 +158,7 @@ test("account deletion does not mutate data when hosted isolation readiness is f
 test("account deletion explains that partial cleanup can be retried", async () => {
   const fetcher: typeof fetch = async (input, init) => {
     const url = String(input);
-    if (url.endsWith("/rest/v1/rpc/applypilot_workspace_ready")) return new Response("true", { status: 200 });
+    if (url.includes("/rest/v1/rpc/")) return new Response("true", { status: 200 });
     if (url.endsWith("/storage/v1/object/list/user-files")) {
       const body = JSON.parse(String(init?.body)) as { prefix: string };
       return new Response(JSON.stringify(listReply(body.prefix)), { status: 200 });

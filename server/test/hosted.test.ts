@@ -72,7 +72,8 @@ function fakePostgrest(
       }
     }
     if (url.pathname === "/rest/v1/rpc/applypilot_workspace_ready"
-      || url.pathname === "/rest/v1/rpc/applypilot_hosted_constraints_ready") {
+      || url.pathname === "/rest/v1/rpc/applypilot_hosted_constraints_ready"
+      || url.pathname === "/rest/v1/rpc/applypilot_master_brain_ready") {
       return new Response("true", { status: 200 });
     }
 
@@ -494,4 +495,53 @@ test("hosted routes fail closed if the per-user resume limit trigger is missing"
   });
   assert.equal(calls.length, 2);
   assert.ok(calls[1]?.endsWith("/rest/v1/rpc/applypilot_hosted_constraints_ready"));
+});
+
+test("master brain recommendations and feedback stay within each owner's workspace", async () => {
+  const calls: Captured[] = [];
+  const db: Db = new Map([
+    ["resumes", [{ id: 1, owner_id: userA, original_name: "resume.txt", parsed_json: null }]],
+    ["jobs", [
+      { id: 2, owner_id: userA, title: "Engineer", company: "Example", description_text: "TypeScript role", status: "new", parsed_json: null },
+      { id: 3, owner_id: userA, title: "Designer", company: "Elsewhere", description_text: "Design role", status: "qualified", parsed_json: { requiredSkills: [] }, qualification_json: { qualifies: true } },
+    ]],
+    ["application_kits", [{ id: 1, owner_id: userA, job_id: 3, honesty_json: { verdict: "fail", unsupportedCount: 1 } }]],
+    ["brain_feedback", [{ id: 1, owner_id: userA, agent: "application_strategist", helpful: true }]],
+  ]);
+  const fetcher = fakePostgrest(calls, db);
+  await withHostedServer(fetcher, async base => {
+    const ownerA = await fetch(`${base}/api/brain`, { headers: requestHeaders() });
+    assert.equal(ownerA.status, 200);
+    const reportA = await ownerA.json() as {
+      learningSignals: number; agents: { id: string; userRating: boolean | null }[];
+      recommendations: { agentId: string; priority: string }[];
+    };
+    assert.equal(reportA.learningSignals, 1);
+    assert.equal(reportA.agents.find(agent => agent.id === "application_strategist")?.userRating, true);
+    assert.ok(reportA.recommendations.some(item => item.agentId === "resume_analyst"));
+    assert.ok(reportA.recommendations.some(item => item.agentId === "truth_guard" && item.priority === "high"));
+
+    const saved = await fetch(`${base}/api/brain/feedback`, {
+      method: "PUT", headers: { ...requestHeaders("token-b"), "content-type": "application/json" },
+      body: JSON.stringify({ agentId: "role_researcher", helpful: true }),
+    });
+    assert.equal(saved.status, 200);
+
+    const ownerB = await fetch(`${base}/api/brain`, { headers: requestHeaders("token-b") });
+    assert.equal(ownerB.status, 200);
+    const reportB = await ownerB.json() as {
+      learningSignals: number; recommendations: { agentId: string }[];
+      agents: { id: string; userRating: boolean | null }[];
+    };
+    assert.equal(reportB.learningSignals, 1);
+    assert.deepEqual(reportB.recommendations, []);
+    assert.equal(reportB.agents.find(agent => agent.id === "role_researcher")?.userRating, true);
+
+    const refreshedA = await fetch(`${base}/api/brain`, { headers: requestHeaders() });
+    const reportAAfter = await refreshedA.json() as { learningSignals: number };
+    assert.equal(reportAAfter.learningSignals, 1);
+  });
+  assert.ok(calls.filter(call =>
+    new URL(call.url).pathname === "/rest/v1/brain_feedback" && call.init?.method === "POST")
+    .every(call => JSON.parse(String(call.init?.body)).owner_id === userB));
 });

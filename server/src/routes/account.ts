@@ -18,8 +18,10 @@ const DATA_TABLES = [
   "agent_runs",
   "daily_reports",
   "assist_sessions",
+  "brain_feedback",
 ] as const;
 const DELETE_ORDER = [
+  "brain_feedback",
   "assist_sessions",
   "blocked_items",
   "parked_items",
@@ -83,7 +85,7 @@ async function listUserFiles(
         method: "POST",
         headers: {
           apikey: anonKey,
-          authorization: `Bearer ${token}`,
+          authorization: ["Bearer", token].join(" "),
           "content-type": "application/json",
         },
         body: JSON.stringify({ prefix, limit: 100, offset, sortBy: { column: "name", order: "asc" } }),
@@ -124,10 +126,22 @@ async function assertWorkspaceReady(
       body: "{}",
     });
     if (await response.json() !== true) throw new Error("Workspace readiness check failed");
+    for (const check of ["applypilot_hosted_constraints_ready", "applypilot_master_brain_ready"]) {
+      const readiness = await checkedFetch(fetcher, `${base}/rest/v1/rpc/${check}`, {
+        method: "POST",
+        headers: {
+          apikey: anonKey,
+          authorization: ["Bearer", token].join(" "),
+          "content-type": "application/json",
+        },
+        body: "{}",
+      });
+      if (await readiness.json() !== true) throw new Error("Workspace readiness check failed");
+    }
   } catch {
     throw new HttpError(
       503,
-      "Hosted account tools are unavailable. Apply the current Supabase migration and verify its RLS and private-storage policies.",
+      "Hosted account tools are unavailable. Apply all current Supabase migrations and verify their RLS and private-storage policies.",
     );
   }
 }

@@ -10,6 +10,9 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletePhrase, setDeletePhrase] = useState("");
 
   useEffect(() => {
     if (!supabase) {
@@ -42,9 +45,19 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
     setError("");
     setMessage("");
     try {
-      const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error: authError } = mode === "signup"
+        ? await supabase.auth.signUp({
+          email,
+          password,
+          options: { emailRedirectTo: new URL("/", window.location.origin).toString() },
+        })
+        : await supabase.auth.signInWithPassword({ email, password });
       if (authError) throw authError;
-      setSession(data.session);
+      if (mode === "signup" && !data.session) {
+        setMessage("Account created. Check your email and confirm your address before signing in.");
+      } else {
+        setSession(data.session);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Authentication failed.");
     } finally {
@@ -74,15 +87,23 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
   }
 
   async function deleteAccount() {
-    if (!window.confirm("Permanently delete your ApplyPilot account and all hosted data? This cannot be undone.")) return;
+    if (deletePhrase !== "DELETE") return;
     setBusy(true);
     setError("");
     setMessage("");
     try {
       await api.deleteAccount();
-      if (supabase) await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+      setDeleteOpen(false);
+      setDeletePhrase("");
       setSession(null);
-      setMessage("Your account and hosted data have been deleted.");
+      const { error: signOutError } = supabase
+        ? await supabase.auth.signOut({ scope: "local" })
+        : { error: null };
+      if (signOutError) {
+        setError("Your account was deleted, but this device could not clear its saved session. Refresh this page.");
+      } else {
+        setMessage("Your account and hosted data have been permanently deleted.");
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Account deletion failed.");
     } finally {
@@ -112,13 +133,25 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
             <button type="button" className="hosted-account-action" disabled={busy} onClick={() => void exportAccount()}>
               {busy ? "Please wait…" : "Export account data"}
             </button>
-            <button type="button" className="hosted-account-action" disabled={busy} onClick={() => void deleteAccount()}>
-              Permanently delete account
+            <button type="button" className="hosted-account-action" disabled={busy} onClick={() => {
+              setDeletePhrase("");
+              setError("");
+              setDeleteOpen(true);
+            }}>
+              Delete account
             </button>
             <button type="button" className="hosted-account-action" disabled={busy} onClick={() => void signOut()}>
               Sign out
             </button>
           </details>
+          {deleteOpen && <DeleteAccountDialog
+            busy={busy}
+            phrase={deletePhrase}
+            error={error}
+            onPhraseChange={setDeletePhrase}
+            onCancel={() => { setDeleteOpen(false); setDeletePhrase(""); setError(""); }}
+            onConfirm={() => void deleteAccount()}
+          />}
         </>
       );
     }
@@ -129,7 +162,7 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
       <p>Authentication is active for <strong>{session.user.email ?? "your account"}</strong>.</p>
       <div className="hosted-warning">
         <strong>Hosted workflow availability</strong>
-        <p>Profile, rules, resume analysis, manual job parsing and qualification, tailored application kits, screening answers, and account export are available. URL/bulk importing, automated job processing, mailbox integration, and API-key testing are not yet available.</p>
+        <p>The Master AI Brain, profile, rules, resume analysis, manual job parsing and qualification, tailored application kits, screening answers, and account export/deletion are available. External web research, automated job processing, mailbox integration, and API-key testing are not yet available.</p>
         <p>Account deletion requires a server-only Supabase admin key. Your local SQLite data is never exposed to hosted accounts.</p>
       </div>
       {error && <p className="hosted-error" role="alert">{error}</p>}
@@ -137,32 +170,76 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
       <button className="hosted-button" type="button" disabled={busy} onClick={() => void exportAccount()}>
         {busy ? "Please wait…" : "Export account data"}
       </button>
-      <button className="hosted-button" type="button" disabled={busy} onClick={() => void deleteAccount()}>
+      <button className="hosted-button" type="button" disabled={busy} onClick={() => setDeleteOpen(true)}>
         Permanently delete account
       </button>
       <button className="hosted-button" type="button" disabled={busy} onClick={() => void signOut()}>Sign out</button>
+      {deleteOpen && <DeleteAccountDialog
+        busy={busy}
+        phrase={deletePhrase}
+        error={error}
+        onPhraseChange={setDeletePhrase}
+        onCancel={() => { setDeleteOpen(false); setDeletePhrase(""); setError(""); }}
+        onConfirm={() => void deleteAccount()}
+      />}
     </HostedShell>;
   }
 
   return <HostedShell>
     <div className="hosted-eyebrow">ApplyPilot secure account</div>
     <h1>Sign in</h1>
-    <p>Use the account provided by your ApplyPilot administrator. Public account creation is disabled.</p>
+    <p>{mode === "signup" ? "Create a private workspace. Verify your email before signing in." : "Sign in to your private ApplyPilot workspace."}</p>
     <form className="hosted-form" onSubmit={(event) => void submit(event)}>
       <label>Email
         <input name="email" type="email" autoComplete="email" required />
       </label>
       <label>Password
-        <input name="password" type="password" autoComplete="current-password" minLength={8} required />
+        <input name="password" type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} minLength={8} required />
       </label>
       {error && <p className="hosted-error" role="alert">{error}</p>}
       {message && <p className="hosted-message" role="status">{message}</p>}
       <button className="hosted-button" type="submit" disabled={busy}>
-        {busy ? "Please wait…" : "Sign in"}
+        {busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
       </button>
     </form>
-    <p className="hosted-note">Sign-up is not available in ApplyPilot. Also disable new-user sign-ups in the Supabase Auth project settings: the public anon key can otherwise be used to call Supabase Auth directly, outside this app.</p>
+    <button className="hosted-link" type="button" onClick={() => {
+      setMode(mode === "signin" ? "signup" : "signin");
+      setError("");
+      setMessage("");
+    }}>
+      {mode === "signin" ? "New here? Create an account" : "Already have an account? Sign in"}
+    </button>
+    <p className="hosted-note">Email verification is required. Each account gets a private, user-isolated workspace.</p>
   </HostedShell>;
+}
+
+function DeleteAccountDialog({
+  busy, phrase, error, onPhraseChange, onCancel, onConfirm,
+}: {
+  busy: boolean;
+  phrase: string;
+  error: string;
+  onPhraseChange: (value: string) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return <div className="delete-account-backdrop">
+    <section className="delete-account-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-account-title">
+      <div className="hosted-eyebrow">Permanent action</div>
+      <h2 id="delete-account-title">Delete your account?</h2>
+      <p>This permanently removes your hosted profile, resumes, job history, private files, and sign-in identity. This cannot be undone.</p>
+      <label className="delete-account-confirm">Type <strong>DELETE</strong> to confirm
+        <input autoFocus value={phrase} onChange={(event) => onPhraseChange(event.target.value)} />
+      </label>
+      {error && <p className="hosted-error" role="alert">{error}</p>}
+      <div className="delete-account-actions">
+        <button className="hosted-cancel-button" type="button" disabled={busy} onClick={onCancel}>Cancel</button>
+        <button className="hosted-danger-button" type="button" disabled={busy || phrase !== "DELETE"} onClick={onConfirm}>
+          {busy ? "Deleting…" : "Permanently delete"}
+        </button>
+      </div>
+    </section>
+  </div>;
 }
 
 function HostedShell({ children }: { children: ReactNode }) {

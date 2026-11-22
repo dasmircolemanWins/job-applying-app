@@ -8,6 +8,7 @@ import {
 } from "../../shared/types";
 import type {
   AgentRun, ApplicationKit, AssistSession, BlockedItem, DashboardData, ExperienceBank, JobDetail,
+  MasterBrainAgentId, MasterBrainReport,
   ParkedItem, ResumeDocument, ResumeSummary, Rules, Settings, SettingsUpdate,
   StandingFacts, Story,
 } from "../../shared/types";
@@ -20,6 +21,7 @@ const NAV = [
   { to: "/resumes", label: "Resumes", icon: "▤" },
   { to: "/profile", label: "Profile & rules", icon: "◎" },
   { to: "/jobs", label: "Jobs", icon: "⌕" },
+  { to: "/brain", label: "Master AI Brain", icon: "✧" },
   { to: "/logs", label: "Activity & logs", icon: "≋" },
   { to: "/settings", label: "Settings", icon: "⚙" },
 ];
@@ -50,7 +52,7 @@ function WorkspaceApp() {
         <Link className="brand" to="/"><span className="brand-mark">A</span><span>Apply<span className="accent">Pilot</span><small>YOUR JOB SEARCH, IN CONTROL</small></span></Link>
         <div className="nav-label">WORKSPACE</div>
         <nav className="nav-list">
-          {NAV.map((item) => <NavLink key={item.to} end={item.end} to={item.to} className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}><span className="nav-icon">{item.icon}</span>{item.label}</NavLink>)}
+          {NAV.filter((item) => item.to !== "/brain" || import.meta.env.PROD).map((item) => <NavLink key={item.to} end={item.end} to={item.to} className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}><span className="nav-icon">{item.icon}</span>{item.label}</NavLink>)}
         </nav>
         <div className="sidebar-bottom">
           <div className="privacy-card"><span className="privacy-icon">⌑</span><strong>{import.meta.env.PROD ? "Private workspace" : "Local by design"}</strong><p>{import.meta.env.PROD ? "Your data is isolated to your signed-in account." : "Your profile, resumes, and application data stay on this machine."}</p></div>
@@ -64,10 +66,11 @@ function WorkspaceApp() {
         </header>
         <div className="page-content">
           {import.meta.env.PROD && <div className="hosted-capability-notice" role="status">
-            Hosted mode supports resume analysis, manual job parsing and qualification, tailored application kits, screening answers, and account export. URL/bulk importing, automated job processing, mailbox integration, and API-key testing are not available yet.
+            Hosted mode includes the Master AI Brain and its private-workspace specialists, resume analysis, manual job parsing and qualification, tailored application kits, screening answers, and account export/deletion. Web research, automated processing, mailbox integration, and API-key testing are not available yet.
           </div>}
           <Routes>
             <Route path="/" element={<Dashboard notify={notify} />} />
+            <Route path="/brain" element={import.meta.env.PROD ? <MasterBrainPage notify={notify} /> : <EmptyState title="Master AI Brain" detail="The hosted specialist workspace is available after sign-in." />} />
             <Route path="/resumes" element={<ResumesPage notify={notify} />} />
             <Route path="/profile" element={<ProfilePage notify={notify} />} />
             <Route path="/jobs" element={<JobsPage notify={notify} />} />
@@ -560,6 +563,72 @@ function LogsPage({ notify }: { notify: (message: string, kind?: ToastMessage["k
 function QueueList({ items, kind, busyId, onResolve }: { items: (BlockedItem | ParkedItem)[]; kind: "blocked" | "parked"; busyId: number | null; onResolve: (id: number) => void }) {
   if (!items.length) return <EmptyState title={`No ${kind} items`} detail="Items needing attention will show up here." />;
   return <div className="compact-list">{items.map((item) => <div className="queue-row" key={item.id}><div className={`queue-symbol ${kind}`}>{kind === "blocked" ? "⚑" : "◷"}</div><div className="compact-main"><strong>{item.title || `Job #${item.jobId}`} · {item.company || "Unknown company"}</strong><span>{kind === "blocked" ? `${(item as BlockedItem).reason}: ${(item as BlockedItem).actionText}` : `${(item as ParkedItem).reason}${(item as ParkedItem).retryPlan ? ` · ${ (item as ParkedItem).retryPlan}` : ""}`}</span></div><Link className="button button-quiet" to={`/jobs/${item.jobId}`}>Open job</Link><Button disabled={busyId === item.id} onClick={() => onResolve(item.id)}>Resolve</Button></div>)}</div>;
+}
+
+function MasterBrainPage({ notify }: { notify: (message: string, kind?: ToastMessage["kind"]) => void }) {
+  const [report, setReport] = useState<MasterBrainReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [savingAgent, setSavingAgent] = useState<MasterBrainAgentId | null>(null);
+  const load = useCallback(() => {
+    setLoading(true);
+    setError("");
+    api.masterBrain().then(setReport).catch((cause: Error) => setError(cause.message)).finally(() => setLoading(false));
+  }, []);
+  useEffect(load, [load]);
+  const rateAgent = async (agentId: MasterBrainAgentId, helpful: boolean) => {
+    setSavingAgent(agentId);
+    setError("");
+    try {
+      await api.rateBrainAgent(agentId, helpful);
+      setReport(await api.masterBrain());
+      notify("Master Brain updated its workspace-specific preference.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save your feedback.");
+    } finally {
+      setSavingAgent(null);
+    }
+  };
+  if (loading) return <><PageHeading eyebrow="WORKSPACE INTELLIGENCE" title="Master AI Brain" /><Loading /></>;
+  if (error && !report) return <><PageHeading title="Master AI Brain" /><ErrorState message={error} retry={load} /></>;
+  if (!report) return null;
+  return <>
+    <PageHeading eyebrow="WORKSPACE INTELLIGENCE" title="Master AI Brain" description="Five focused agents review your private job-search workspace and report back with evidence-based next steps." />
+    {error && <div className="inline-error" role="alert">{error}</div>}
+    <div className="brain-safety-note">
+      <strong>You stay in control.</strong> Specialists only inspect data in your workspace. They do not browse the web, contact employers, submit applications, change your records, or train across accounts. Feedback teaches this workspace which agents you find useful and helps prioritize future suggestions; your approval is always required for any action.
+    </div>
+    <Panel title="Master summary" subtitle={report.summary}>
+      <div className="brain-summary-row">
+        <div><strong>{report.recommendations.length}</strong><span>review suggestions</span></div>
+        <div><strong>{report.learningSignals}</strong><span>workspace feedback signals</span></div>
+        <span className="brain-updated">Updated {new Date(report.generatedAt).toLocaleString()}</span>
+      </div>
+      {report.recommendations.length ? <div className="brain-recommendations">
+        {report.recommendations.map((item) => {
+          const agent = report.agents.find((entry) => entry.id === item.agentId);
+          return <article className="brain-recommendation" key={item.id}>
+            <div className="brain-recommendation-meta"><span>{agent?.name ?? "Specialist agent"}</span><StatusPill value={item.priority} /></div>
+            <strong>{item.title}</strong>
+            <p>{item.detail}</p>
+            <Link className="button button-quiet" to={item.href}>Review workspace</Link>
+          </article>;
+        })}
+      </div> : <EmptyState title="No follow-up needed" detail="Your specialists found no outstanding review steps in the current workspace." />}
+    </Panel>
+    <Panel title="Mini agents" subtitle="Rate each specialist. These private feedback signals help the Master Brain prioritize useful guidance for you.">
+      <div className="brain-agent-grid">
+        {report.agents.map((agent) => <article className="brain-agent-card" key={agent.id}>
+          <div className="brain-agent-title"><span className="brain-agent-mark">✧</span><strong>{agent.name}</strong></div>
+          <p>{agent.focus}</p>
+          <div className="brain-feedback">
+            <button type="button" className={agent.userRating === true ? "brain-vote selected" : "brain-vote"} disabled={savingAgent === agent.id} onClick={() => void rateAgent(agent.id, true)}>Helpful</button>
+            <button type="button" className={agent.userRating === false ? "brain-vote selected" : "brain-vote"} disabled={savingAgent === agent.id} onClick={() => void rateAgent(agent.id, false)}>Not helpful</button>
+          </div>
+        </article>)}
+      </div>
+    </Panel>
+  </>;
 }
 
 function SettingsPage({ notify }: { notify: (message: string, kind?: ToastMessage["kind"]) => void }) {
