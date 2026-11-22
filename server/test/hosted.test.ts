@@ -140,15 +140,27 @@ test("hosted settings never return stored credentials", async () => {
   const db: Db = new Map();
   await withHostedServer(fakePostgrest(calls, db), async base => {
     const secret = "sk-ant-hosted-never-return-this";
+    const searchKey = "rapidapi-private-test-key";
+    const adzunaKey = "adzuna-private-test-key";
     const update = await fetch(`${base}/api/settings`, {
       method: "PUT", headers: { ...requestHeaders(), "content-type": "application/json" },
-      body: JSON.stringify({ anthropicApiKey: secret }),
+      body: JSON.stringify({ anthropicApiKey: secret, jobSearchApiKey: searchKey, adzunaAppId: "adzuna-app-id", adzunaAppKey: adzunaKey }),
     });
     assert.equal(update.status, 200);
     const text = await update.text();
     assert.ok(!text.includes(secret));
+    assert.ok(!text.includes(searchKey));
+    assert.ok(!text.includes(adzunaKey));
     assert.match(text, /anthropicApiKeyMasked/);
     assert.equal(db.get("settings")?.[0]?.value, secret);
+    assert.equal(db.get("settings")?.find(row => row.key === "jsearch_api_key")?.value, searchKey);
+    assert.equal(db.get("settings")?.find(row => row.key === "adzuna_app_key")?.value, adzunaKey);
+    const read = await fetch(`${base}/api/settings`, { headers: requestHeaders() });
+    const settingsText = await read.text();
+    assert.ok(!settingsText.includes(searchKey));
+    assert.ok(!settingsText.includes(adzunaKey));
+    assert.match(settingsText, /hasJobSearchApiKey/);
+    assert.match(settingsText, /hasAdzunaCredentials/);
   });
   assert.ok(calls.filter(call => new URL(call.url).pathname.startsWith("/rest/v1/") && call.init?.method !== "POST")
     .every(call => new URL(call.url).searchParams.get("owner_id") === `eq.${userA}`));
@@ -286,6 +298,103 @@ test("hosted posting research is user-triggered, owner-isolated, and rejects pri
   assert.ok(calls.filter(call => new URL(call.url).pathname === "/rest/v1/jobs").every(call =>
     new URL(call.url).searchParams.get("owner_id") === `eq.${userA}` ||
     new URL(call.url).searchParams.get("owner_id") === `eq.${userB}`));
+});
+
+test("hosted job discovery uses the owner's provider key and deduplicates results", async () => {
+  const calls: Captured[] = [];
+  const providerCalls: Captured[] = [];
+  const db: Db = new Map([
+    ["settings", [{ id: 1, owner_id: userA, key: "jsearch_api_key", value: "private-test-key" }]],
+    ["jobs", []],
+  ]);
+  const postgrest = fakePostgrest(calls, db);
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === "jsearch.p.rapidapi.com") {
+      providerCalls.push({ url: url.toString(), init });
+      return new Response(JSON.stringify({ data: [{
+        job_title: "Platform Engineer", employer_name: "Example Corp", job_city: "Seattle",
+        job_state: "WA", job_country: "US", job_description: "<p>Build reliable TypeScript services.</p>",
+        job_apply_link: "https://jobs.example.com/roles/123", job_publisher: "Example Board",
+      }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return postgrest(input, init);
+  };
+  await withHostedServer(fetcher, async base => {
+    const request = () => fetch(`${base}/api/jobs/discover`, {
+      method: "POST", headers: { ...requestHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ provider: "jsearch", query: "Platform Engineer", location: "Seattle", remoteOnly: true }),
+    });
+    const first = await request();
+    assert.equal(first.status, 200);
+    const firstResult = await first.json() as { found: number; added: number; duplicates: number; jobs: { title: string; board: string }[] };
+    assert.deepEqual({ found: firstResult.found, added: firstResult.added, duplicates: firstResult.duplicates }, {
+      found: 1, added: 1, duplicates: 0,
+    });
+    assert.equal(firstResult.jobs[0]?.title, "Platform Engineer");
+    assert.equal(firstResult.jobs[0]?.board, "Example Board");
+
+    const second = await request();
+    assert.equal(second.status, 200);
+    const secondResult = await second.json() as { added: number; duplicates: number };
+    assert.equal(secondResult.added, 0);
+    assert.equal(secondResult.duplicates, 1);
+
+    const ownerB = await fetch(`${base}/api/jobs/discover`, {
+      method: "POST", headers: { ...requestHeaders("token-b"), "content-type": "application/json" },
+      body: JSON.stringify({ provider: "jsearch", query: "Platform Engineer" }),
+    });
+    assert.equal(ownerB.status, 400);
+    assert.match((await ownerB.json() as { error: string }).error, /RapidAPI key/i);
+  });
+  assert.equal(providerCalls.length, 2);
+  assert.equal(new Headers(providerCalls[0]?.init?.headers).get("X-RapidAPI-Key"), "private-test-key");
+  assert.equal(new URL(providerCalls[0]!.url).searchParams.get("remote_jobs_only"), "true");
+  assert.equal(db.get("jobs")?.length, 1);
+  assert.equal(db.get("jobs")?.[0]?.owner_id, userA);
+});
+
+test("hosted job discovery normalizes Adzuna results into the private pipeline", async () => {
+  const calls: Captured[] = [];
+  const db: Db = new Map([
+    ["settings", [
+      { id: 1, owner_id: userA, key: "adzuna_app_id", value: "private-app-id" },
+      { id: 2, owner_id: userA, key: "adzuna_app_key", value: "private-app-key" },
+    ]],
+    ["jobs", []],
+  ]);
+  const postgrest = fakePostgrest(calls, db);
+  const providerCalls: Captured[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === "api.adzuna.com") {
+      providerCalls.push({ url: url.toString(), init });
+      return new Response(JSON.stringify({ results: [{
+        title: "Registered Nurse", company: { display_name: "Community Health" },
+        location: { display_name: "Portland, OR" }, description: "<p>Provide compassionate patient care.</p>",
+        redirect_url: "https://jobs.example.com/nurse", category: { label: "Healthcare" },
+      }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return postgrest(input, init);
+  };
+  await withHostedServer(fetcher, async base => {
+    const response = await fetch(`${base}/api/jobs/discover`, {
+      method: "POST", headers: { ...requestHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ provider: "adzuna", query: "Registered Nurse", location: "Portland, OR" }),
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json() as { added: number; jobs: { title: string; company: string; location: string; board: string }[] };
+    assert.equal(result.added, 1);
+    assert.deepEqual(result.jobs[0] && {
+      title: result.jobs[0].title, company: result.jobs[0].company,
+      location: result.jobs[0].location, board: result.jobs[0].board,
+    }, { title: "Registered Nurse", company: "Community Health", location: "Portland, OR", board: "Healthcare" });
+  });
+  const providerUrl = new URL(providerCalls[0]!.url);
+  assert.equal(providerUrl.searchParams.get("app_id"), "private-app-id");
+  assert.equal(providerUrl.searchParams.get("app_key"), "private-app-key");
+  assert.equal(db.get("jobs")?.[0]?.owner_id, userA);
+  assert.doesNotMatch(JSON.stringify(db.get("jobs")), /private-app-key/);
 });
 
 test("stored resume analysis is deterministic and persists only to its owner", async () => {

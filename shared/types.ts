@@ -104,6 +104,11 @@ export interface Settings {
   model: string;
   effort: Effort;
   autoSubmit: boolean;
+  jobSearchApiKeyMasked: string;
+  hasJobSearchApiKey: boolean;
+  adzunaAppId: string;
+  adzunaAppKeyMasked: string;
+  hasAdzunaCredentials: boolean;
   imapHost: string;
   imapPort: number;
   imapUser: string;
@@ -126,6 +131,9 @@ export interface SettingsUpdate {
   model?: string;
   effort?: Effort;
   autoSubmit?: boolean;
+  jobSearchApiKey?: string;
+  adzunaAppId?: string;
+  adzunaAppKey?: string;
   imapHost?: string;
   imapPort?: number;
   imapUser?: string;
@@ -429,6 +437,22 @@ export interface JobCreateInput {
   title?: string;
   company?: string;
   board?: string;
+}
+
+export interface JobDiscoveryInput {
+  provider: "jsearch" | "adzuna";
+  query: string;
+  location?: string;
+  remoteOnly?: boolean;
+  maxResults?: number;
+}
+
+export interface JobDiscoveryResult {
+  provider: JobDiscoveryInput["provider"];
+  found: number;
+  added: number;
+  duplicates: number;
+  jobs: JobSummary[];
 }
 
 export interface JobListQuery {

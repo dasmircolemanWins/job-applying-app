@@ -8,6 +8,7 @@ import {
 } from "../../shared/types";
 import type {
   AgentRun, ApplicationKit, AssistSession, BlockedItem, DashboardData, ExperienceBank, JobDetail,
+  JobDiscoveryInput, JobDiscoveryResult,
   MasterBrainAgentId, MasterBrainReport,
   ParkedItem, ResumeDocument, ResumeSummary, Rules, Settings, SettingsUpdate,
   StandingFacts, Story,
@@ -336,6 +337,11 @@ function JobsPage({ notify }: { notify: (message: string, kind?: ToastMessage["k
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [emailResult, setEmailResult] = useState("");
+  const [discoveryProvider, setDiscoveryProvider] = useState<JobDiscoveryInput["provider"]>("jsearch");
+  const [discoveryQuery, setDiscoveryQuery] = useState("");
+  const [discoveryLocation, setDiscoveryLocation] = useState("United States");
+  const [remoteOnly, setRemoteOnly] = useState(false);
+  const [discoveryResult, setDiscoveryResult] = useState<JobDiscoveryResult | null>(null);
   const navigate = useNavigate();
   const load = useCallback(() => {
     setLoading(true); setError("");
@@ -372,6 +378,18 @@ function JobsPage({ notify }: { notify: (message: string, kind?: ToastMessage["k
     const result = await act(() => api.emailSweep(), "Email alert sweep finished");
     if (result) setEmailResult(`Scanned ${result.emailsScanned} emails · found ${result.urlsFound} links · added ${result.jobsCreated.length} jobs · ${result.duplicates} duplicates`);
   };
+  const discover = async (event: FormEvent) => {
+    event.preventDefault();
+    const result = await act(() => api.discoverJobs({
+      provider: discoveryProvider, query: discoveryQuery.trim(), location: discoveryLocation.trim(),
+      remoteOnly, maxResults: 10,
+    }), "Job search complete");
+    if (result) {
+      setDiscoveryResult(result);
+      setTotal(current => current + result.added);
+      if (result.added) load();
+    }
+  };
   const runSelected = async () => {
     if (!selected.length) return;
     setBusy(true); setError("");
@@ -394,6 +412,20 @@ function JobsPage({ notify }: { notify: (message: string, kind?: ToastMessage["k
     <PageHeading eyebrow="DISCOVER & QUALIFY" title="Job pipeline" description={`${total} roles tracked. Keep your shortlist focused on opportunities that fit.`} action={<Button onClick={emailSweep} disabled={busy}>✉ Sweep email alerts</Button>} />
     {error && <div className="inline-error">{error}<button onClick={() => setError("")}>×</button></div>}
     {emailResult && <div className="inline-success">{emailResult}<button onClick={() => setEmailResult("")}>×</button></div>}
+    <Panel title="Discover jobs across boards" subtitle="Search via licensed job-search APIs that aggregate participating sources. Configure provider credentials in Settings; availability and coverage depend on each provider.">
+      <form className="add-job-form" onSubmit={(event) => void discover(event)}>
+        <select aria-label="Job search provider" value={discoveryProvider} onChange={(event) => setDiscoveryProvider(event.target.value as JobDiscoveryInput["provider"])}>
+          <option value="jsearch">JSearch · multi-board aggregator</option>
+          <option value="adzuna">Adzuna · job search API</option>
+        </select>
+        <input aria-label="Job title or keywords" required minLength={2} maxLength={200} placeholder="Job title or skills, e.g. Registered Nurse" value={discoveryQuery} onChange={(event) => setDiscoveryQuery(event.target.value)} />
+        <input aria-label="Job location" maxLength={120} placeholder="Location" value={discoveryLocation} onChange={(event) => setDiscoveryLocation(event.target.value)} />
+        <label className="toggle-line"><input type="checkbox" checked={remoteOnly} onChange={(event) => setRemoteOnly(event.target.checked)} />Remote jobs</label>
+        <Button type="submit" variant="primary" disabled={busy || !discoveryQuery.trim()}>⌕ Search listings</Button>
+      </form>
+      {discoveryResult && <div className="inline-success" role="status">{discoveryResult.provider} found {discoveryResult.found} listings · added {discoveryResult.added} · {discoveryResult.duplicates} already saved</div>}
+      <p className="muted">Search results are saved to your private pipeline. Review each role before preparing or submitting an application. Job boards may require separate accounts or offer limited regional coverage.</p>
+    </Panel>
     <Panel title="Add a job" subtitle="Save a posting to review it with your own application rules.">
       <div className="tabs compact-tabs"><button className={addMode === "url" ? "tab active" : "tab"} onClick={() => setAddMode("url")}>Posting URL</button><button className={addMode === "paste" ? "tab active" : "tab"} onClick={() => setAddMode("paste")}>Paste description</button><button className={addMode === "bulk" ? "tab active" : "tab"} onClick={() => setAddMode("bulk")}>Bulk URLs</button></div>
       <form className="add-job-form" onSubmit={add}>
@@ -619,7 +651,7 @@ function MasterBrainPage({ notify }: { notify: (message: string, kind?: ToastMes
     <PageHeading eyebrow="WORKSPACE INTELLIGENCE" title="Master AI Brain" description="Five focused agents review your private job-search workspace and report back with evidence-based next steps." />
     {error && <div className="inline-error" role="alert">{error}</div>}
     <div className="brain-safety-note">
-      <strong>You stay in control.</strong> The Brain reviews recent specialist runs against saved outcomes in your private workspace and issues a final recommendation. Specialists can research public job URLs that you provide when you explicitly start a research action, and prepare email/application drafts. They cannot access credentials or other users' data; sending a message or submitting an application always remains your explicit action.
+      <strong>You stay in control.</strong> The Brain reviews recent specialist runs against saved outcomes in your private workspace and issues a final recommendation. Specialists can search participating job boards through configured APIs or research public URLs you provide. They can prepare email/application drafts, but cannot access credentials or other users' data; sending a message or submitting an application always remains your explicit action.
     </div>
     <Panel title="Master summary" subtitle={report.summary}>
       <div className="brain-summary-row">
@@ -677,6 +709,8 @@ function SettingsPage({ notify }: { notify: (message: string, kind?: ToastMessag
   const [settings, setSettings] = useState<Settings | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [imapPassword, setImapPassword] = useState("");
+  const [jobSearchApiKey, setJobSearchApiKey] = useState("");
+  const [adzunaAppKey, setAdzunaAppKey] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [testResult, setTestResult] = useState("");
@@ -693,10 +727,13 @@ function SettingsPage({ notify }: { notify: (message: string, kind?: ToastMessag
       model: settings.model, effort: settings.effort, autoSubmit: settings.autoSubmit, imapHost: settings.imapHost,
       imapPort: settings.imapPort, imapUser: settings.imapUser, imapFolder: settings.imapFolder,
       dailyTarget: settings.dailyTarget, mockMode: settings.mockMode,
+      adzunaAppId: settings.adzunaAppId,
     };
     if (apiKey.trim()) payload.anthropicApiKey = apiKey.trim();
     if (imapPassword) payload.imapPassword = imapPassword;
-    void action.run(() => api.updateSettings(payload), "Settings saved", (saved) => { setSettings(saved); setApiKey(""); setImapPassword(""); });
+    if (jobSearchApiKey.trim()) payload.jobSearchApiKey = jobSearchApiKey.trim();
+    if (adzunaAppKey.trim()) payload.adzunaAppKey = adzunaAppKey.trim();
+    void action.run(() => api.updateSettings(payload), "Settings saved", (saved) => { setSettings(saved); setApiKey(""); setImapPassword(""); setJobSearchApiKey(""); setAdzunaAppKey(""); });
   };
   const testKey = async () => { const result = await action.run(() => api.testKey(), "API key test finished"); if (result) setTestResult(result.message); };
   const testEmail = async () => { const result = await action.run(() => api.emailTest(), "Mailbox test finished"); if (result) setTestResult(result.message); };
@@ -706,7 +743,15 @@ function SettingsPage({ notify }: { notify: (message: string, kind?: ToastMessag
     <form onSubmit={save}>
       <Panel title="AI connection" subtitle="Credentials are write-only and are never displayed in full.">
         <div className="form-grid"><Field label="Anthropic API key" hint={settings.hasApiKey ? `Saved: ${settings.anthropicApiKeyMasked || "configured"} · source: ${settings.apiKeySource}` : "No key configured"} className="col-span-2"><input type="password" autoComplete="new-password" placeholder={settings.hasApiKey ? "Enter a new key to replace the saved key" : "sk-ant-…"} value={apiKey} onChange={(e) => setApiKey(e.target.value)} /></Field><Field label="Model"><input value={settings.model} onChange={(e) => update("model", e.target.value)} /></Field><Field label="Reasoning effort"><select value={settings.effort} onChange={(e) => update("effort", e.target.value as Settings["effort"])}>{["low", "medium", "high", "max"].map((value) => <option key={value}>{value}</option>)}</select></Field><Field label="Mock mode"><select value={settings.mockMode} onChange={(e) => update("mockMode", e.target.value as Settings["mockMode"])}><option value="auto">Auto</option><option value="on">Always on</option><option value="off">Always live</option></select></Field><Field label="Daily target"><input type="number" min="1" value={settings.dailyTarget} onChange={(e) => update("dailyTarget", Number(e.target.value))} /></Field></div><div className="panel-footer"><Button disabled={action.busy} onClick={testKey}>Test API key</Button><Button variant="primary" type="submit" disabled={action.busy}>Save settings</Button></div><div className="info-line"><span>✦</span>{settings.mockActive ? "Mock mode is active. No model API calls are made; the local deterministic workflow is available." : "Live mode is active. AI agent requests use your configured API key."}</div></Panel>
-      <Panel title="Agent actions & submission safeguards" subtitle="Agents can research public posting URLs you provide and prepare application or email drafts."><div className="safety-box"><strong>You approve every external action</strong><p>Agents retrieve only public job pages when you explicitly start research. They cannot sign in, solve CAPTCHAs, or bypass a site's controls. Employer emails open as drafts in your email app and are sent only if you press Send. To apply, open the employer's site, review and submit the form yourself, then confirm it here.</p><small>The legacy auto-submit preference is not used. No message or application is sent in the background.</small></div></Panel>
+      <Panel title="Agent actions & submission safeguards" subtitle="Search participating job boards with your configured provider APIs; application and contact actions remain user-directed."><div className="safety-box"><strong>Research is provider-powered, not scraped</strong><p>Search APIs may include listings from Monster, Snagajob, ZipRecruiter, SimplyHired, LinkedIn, and other participating boards, depending on each provider's current coverage. Agents cannot sign in, solve CAPTCHAs, or bypass site controls. Employer emails open as drafts in your email app; you submit applications yourself on the employer's site.</p><small>The legacy auto-submit preference is not used. No message or application is sent in the background.</small></div></Panel>
+      <Panel title="Job-search provider credentials" subtitle="Credentials are private to your workspace and are never returned in full. You can use one or both supported search APIs.">
+        <div className="form-grid">
+          <Field label="JSearch RapidAPI key" hint={settings.hasJobSearchApiKey ? `Saved: ${settings.jobSearchApiKeyMasked}` : "Aggregates listings from supported job boards; get a key from RapidAPI."}><input type="password" autoComplete="new-password" value={jobSearchApiKey} onChange={(event) => setJobSearchApiKey(event.target.value)} placeholder={settings.hasJobSearchApiKey ? "Enter a new key to replace" : "RapidAPI key"} /></Field>
+          <Field label="Adzuna application ID" hint="Public client identifier from your Adzuna API account."><input value={settings.adzunaAppId} onChange={(event) => update("adzunaAppId", event.target.value)} placeholder="Adzuna app ID" /></Field>
+          <Field label="Adzuna application key" hint={settings.hasAdzunaCredentials ? `Saved: ${settings.adzunaAppKeyMasked}` : "Write-only API secret from your Adzuna API account."}><input type="password" autoComplete="new-password" value={adzunaAppKey} onChange={(event) => setAdzunaAppKey(event.target.value)} placeholder={settings.hasAdzunaCredentials ? "Enter a new key to replace" : "Adzuna API key"} /></Field>
+        </div>
+        <div className="panel-footer"><Button variant="primary" type="submit" disabled={action.busy}>Save provider credentials</Button><span className="muted">The search page can use JSearch or Adzuna once configured.</span></div>
+      </Panel>
       <Panel title="Email job alerts" subtitle="IMAP connects using TLS. Use an app password; never lower your email account security."><div className="form-grid"><Field label="IMAP host"><input value={settings.imapHost} onChange={(e) => update("imapHost", e.target.value)} placeholder="imap.gmail.com" /></Field><Field label="TLS port"><input type="number" value={settings.imapPort} onChange={(e) => update("imapPort", Number(e.target.value))} /></Field><Field label="Username"><input value={settings.imapUser} onChange={(e) => update("imapUser", e.target.value)} /></Field><Field label="App password" hint={settings.imapPasswordSet ? "A password is already saved" : "Write-only credential"}><input type="password" autoComplete="new-password" value={imapPassword} onChange={(e) => setImapPassword(e.target.value)} placeholder={settings.imapPasswordSet ? "Enter a new password to replace" : "App password"} /></Field><Field label="Folder"><input value={settings.imapFolder} onChange={(e) => update("imapFolder", e.target.value)} /></Field></div><div className="panel-footer"><Button disabled={action.busy} onClick={testEmail}>Test mailbox</Button><span className="muted">For Gmail, create an App Password with 2-Step Verification enabled.</span></div></Panel>
       <Panel title="Browser & data" subtitle="External application sites open in your browser; agents do not control login sessions or application forms."><div className="settings-list"><div><span>Chromium available</span><StatusPill value={settings.browserInstalled ? "installed" : "not installed"} /></div><div><span>Local data folder</span><code className="path-code">{settings.dataDir || "Not reported"}</code></div><div><span>Current agent mode</span><StatusPill value={settings.mockActive ? "mock active" : "live"} /></div></div></Panel>
     </form>

@@ -1,7 +1,7 @@
 import type {
   AgentRun, Application, ApplicationKit, AssistSession, AssistStatusResponse, BlockedItem,
   BulkAddResult, DashboardData, DailyReport, ExperienceBank, IntakeSuggestion, Job, JobCreateInput,
-  JobDetail, JobListResponse, JobStatus, KitUpdate, LedgerResponse, MasterBrainAgentId,
+  JobDetail, JobDiscoveryInput, JobDiscoveryResult, JobListResponse, JobStatus, KitUpdate, LedgerResponse, MasterBrainAgentId,
   MasterBrainReport, ParkedItem, ParkInput,
   Resume, ResumeSummary, ResumeUpdate, RunStatus, ScreeningAnswer, Settings, SettingsUpdate, StandingFacts,
   Rules, Story, StoryUpdate, TestKeyResult, WeeklyReport,
@@ -110,6 +110,7 @@ export const api = {
   bank: () => request<ExperienceBank | null>("/experience-bank"),
   jobs: (query = "") => request<JobListResponse>(`/jobs${query}`),
   addJob: (value: JobCreateInput) => request<Job>("/jobs", json("POST", value)),
+  discoverJobs: (value: JobDiscoveryInput) => request<JobDiscoveryResult>("/jobs/discover", json("POST", value)),
   bulkJobs: (urls: string[]) => request<BulkAddResult>("/jobs/bulk", json("POST", { urls })),
   deleteJob: (id: number) => request<void>(`/jobs${idPath(id)}`, { method: "DELETE" }),
   job: (id: number) => request<JobDetail>(`/jobs${idPath(id)}`),

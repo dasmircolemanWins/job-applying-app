@@ -156,9 +156,16 @@ additional boundary.
 
 The following workflows are **not yet available in hosted mode** and respond
 with an explicit unavailable error: bulk URL importing, automated job
-processing, API-key testing, and mailbox integration. Hosted users can add or
-refresh one public job posting URL at a time; fetching is limited to public
-HTTP(S) pages and rejects private-network destinations.
+processing, API-key testing, and mailbox integration. Hosted users can search
+via JSearch (RapidAPI) or Adzuna by configuring their own provider credentials
+in Settings. JSearch aggregates listings from its participating sources; board
+coverage (which may include sites such as Monster, Snagajob, ZipRecruiter,
+SimplyHired, or LinkedIn) depends on the provider's current catalog and terms.
+ApplyPilot does not scrape those sites or bypass their access controls.
+Hosted users can also add or refresh one public job posting URL at a time;
+fetching is limited to public HTTP(S) pages and rejects private-network
+destinations. Search results are saved to the owner's isolated job pipeline;
+they are not auto-applied.
 Hosted accounts start with fresh data; there is no local resume or history
 migration/import. Resume uploads are limited to 10 per account, enforced by
 both the API and a transaction-safe PostgreSQL trigger.

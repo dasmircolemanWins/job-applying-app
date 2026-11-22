@@ -4,14 +4,15 @@ import path from "node:path";
 import multer from "multer";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
+import * as cheerio from "cheerio";
 import {
   DEFAULT_DAILY_TARGET, DEFAULT_EFFORT, DEFAULT_MODEL, DEFAULT_RULES, DEFAULT_STANDING_FACTS,
   EFFORT_LEVELS, JOB_STATUSES, MASTER_BRAIN_AGENTS, MAX_RESUMES, MAX_UPLOAD_BYTES, MOCK_MODES,
 } from "../../../shared/types.js";
 import type {
-  ApplicationRoute, ExperienceBank, JobPosting, JobStatus, MasterBrainAgentId, MasterBrainFinalDecision,
-  MasterBrainRecommendation, MasterBrainRunReview, Qualification, ResumeDocument, ResumeSelection, Rules,
-  ScreeningAnswer, StandingFacts, Story,
+  ApplicationRoute, ExperienceBank, JobDiscoveryInput, JobPosting, JobStatus, MasterBrainAgentId,
+  MasterBrainFinalDecision, MasterBrainRecommendation, MasterBrainRunReview, Qualification,
+  ResumeDocument, ResumeSelection, Rules, ScreeningAnswer, StandingFacts, Story,
 } from "../../../shared/types.js";
 import { HttpError, asyncHandler, badRequest, conflict, idParam, notFound, validate } from "../http.js";
 import { extractResumeTextFromBuffer, ALLOWED_RESUME_TYPES } from "../services/resumeParse.js";
@@ -29,6 +30,137 @@ const numberId = (row: Row) => Number(row.id);
 
 function encodedEq(value: string | number): string {
   return `eq.${String(value)}`;
+}
+
+type DiscoveredJob = {
+  title: string;
+  company: string;
+  location: string;
+  description: string;
+  url: string;
+  board: string;
+};
+
+const jsearchResponseSchema = z.object({
+  data: z.array(z.object({
+    job_title: z.string().nullish(),
+    employer_name: z.string().nullish(),
+    job_city: z.string().nullish(),
+    job_state: z.string().nullish(),
+    job_country: z.string().nullish(),
+    job_description: z.string().nullish(),
+    job_apply_link: z.string().nullish(),
+    job_publisher: z.string().nullish(),
+  }).passthrough()),
+});
+
+const adzunaResponseSchema = z.object({
+  results: z.array(z.object({
+    title: z.string().nullish(),
+    company: z.object({ display_name: z.string().nullish() }).nullish(),
+    location: z.object({ display_name: z.string().nullish() }).nullish(),
+    description: z.string().nullish(),
+    redirect_url: z.string().nullish(),
+    category: z.object({ label: z.string().nullish() }).nullish(),
+  }).passthrough()),
+});
+
+function publicHttpUrl(raw: string | null | undefined): string {
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function cleanJobDescription(value: string | null | undefined): string {
+  if (!value) return "";
+  return cheerio.load(value).text().replace(/\s+/g, " ").trim().slice(0, 200_000);
+}
+
+async function requestSearchProvider(ctx: HostedContext, url: URL, headers: RequestInit["headers"]): Promise<unknown> {
+  let response: globalThis.Response;
+  try {
+    response = await ctx.fetcher(url, {
+      headers,
+      redirect: "error",
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    throw new HttpError(502, "Job search provider could not be reached. Check the provider configuration and try again.");
+  }
+  if (!response.ok) {
+    throw new HttpError(response.status === 429 ? 429 : 502,
+      response.status === 429
+        ? "Job search provider rate limit reached. Try again later."
+        : `Job search provider returned HTTP ${response.status}. Check its API key and account limits.`);
+  }
+  try {
+    return await response.json() as unknown;
+  } catch {
+    throw new HttpError(502, "Job search provider returned an invalid response.");
+  }
+}
+
+async function discoverWithProvider(
+  ctx: HostedContext,
+  provider: JobDiscoveryInput["provider"],
+  query: string,
+  location: string,
+  remoteOnly: boolean,
+  maxResults: number,
+  settings: Map<string, string>,
+): Promise<DiscoveredJob[]> {
+  if (provider === "jsearch") {
+    const key = settings.get("jsearch_api_key")?.trim();
+    if (!key) throw badRequest("Add a JSearch RapidAPI key in Settings before searching.");
+    const url = new URL("https://jsearch.p.rapidapi.com/search");
+    url.searchParams.set("query", `${query}${location ? ` in ${location}` : ""}`);
+    url.searchParams.set("page", "1");
+    url.searchParams.set("num_pages", "1");
+    url.searchParams.set("country", "us");
+    url.searchParams.set("date_posted", "all");
+    if (remoteOnly) url.searchParams.set("remote_jobs_only", "true");
+    const result = jsearchResponseSchema.safeParse(await requestSearchProvider(ctx, url, {
+      "X-RapidAPI-Key": key,
+      "X-RapidAPI-Host": "jsearch.p.rapidapi.com",
+      accept: "application/json",
+    }));
+    if (!result.success) throw new HttpError(502, "JSearch returned job data in an unsupported format.");
+    return result.data.data.slice(0, maxResults).map(row => ({
+      title: row.job_title?.trim() ?? "",
+      company: row.employer_name?.trim() ?? "",
+      location: [row.job_city, row.job_state, row.job_country].filter(Boolean).join(", "),
+      description: cleanJobDescription(row.job_description),
+      url: publicHttpUrl(row.job_apply_link),
+      board: row.job_publisher?.trim() || "JSearch",
+    }));
+  }
+
+  const appId = settings.get("adzuna_app_id")?.trim();
+  const appKey = settings.get("adzuna_app_key")?.trim();
+  if (!appId || !appKey) throw badRequest("Add Adzuna API credentials in Settings before searching.");
+  const url = new URL("https://api.adzuna.com/v1/api/jobs/us/search/1");
+  url.searchParams.set("app_id", appId);
+  url.searchParams.set("app_key", appKey);
+  url.searchParams.set("results_per_page", String(maxResults));
+  url.searchParams.set("what", query);
+  if (location) url.searchParams.set("where", location);
+  url.searchParams.set("content-type", "application/json");
+  const result = adzunaResponseSchema.safeParse(await requestSearchProvider(ctx, url, { accept: "application/json" }));
+  if (!result.success) throw new HttpError(502, "Adzuna returned job data in an unsupported format.");
+  return result.data.results.slice(0, maxResults).map(row => ({
+    title: row.title?.trim() ?? "",
+    company: row.company?.display_name?.trim() ?? "",
+    location: row.location?.display_name?.trim() ?? "",
+    description: cleanJobDescription(row.description),
+    url: publicHttpUrl(row.redirect_url),
+    board: row.category?.label?.trim() || "Adzuna",
+  }));
 }
 
 function blockedView(row: Row, job?: Row): Row {
@@ -839,6 +971,11 @@ export function createHostedRouter(options: HostedOptions = {}) {
       hasApiKey: hasKey, apiKeySource: storedKey ? "settings" : envKey ? "env" : "none",
       model: values.get("model") || DEFAULT_MODEL, effort: values.get("effort") || DEFAULT_EFFORT,
       autoSubmit: values.get("auto_submit") === "1", imapHost: values.get("imap_host") || "",
+      jobSearchApiKeyMasked: values.get("jsearch_api_key") ? `••••${values.get("jsearch_api_key")!.slice(-4)}` : "",
+      hasJobSearchApiKey: !!values.get("jsearch_api_key"),
+      adzunaAppId: values.get("adzuna_app_id") || "",
+      adzunaAppKeyMasked: values.get("adzuna_app_key") ? `••••${values.get("adzuna_app_key")!.slice(-4)}` : "",
+      hasAdzunaCredentials: !!(values.get("adzuna_app_id") && values.get("adzuna_app_key")),
       imapPort: Number(values.get("imap_port")) || 993, imapUser: values.get("imap_user") || "",
       imapPasswordSet: !!values.get("imap_password"), imapFolder: values.get("imap_folder") || "INBOX",
       dailyTarget: Number(values.get("daily_target")) || DEFAULT_DAILY_TARGET, mockMode: mode,
@@ -848,6 +985,8 @@ export function createHostedRouter(options: HostedOptions = {}) {
   const settingsSchema = z.object({
     anthropicApiKey: z.string().max(500).optional(), model: z.string().trim().min(1).max(120).optional(),
     effort: z.enum(EFFORT_LEVELS).optional(), autoSubmit: z.boolean().optional(), imapHost: z.string().max(255).optional(),
+    jobSearchApiKey: z.string().max(500).optional(), adzunaAppId: z.string().max(200).optional(),
+    adzunaAppKey: z.string().max(500).optional(),
     imapPort: z.number().int().min(1).max(65535).optional(), imapUser: z.string().max(255).optional(),
     imapPassword: z.string().max(500).optional(), imapFolder: z.string().max(255).optional(),
     dailyTarget: z.number().int().min(1).max(10000).optional(), mockMode: z.enum(MOCK_MODES).optional(),
@@ -858,6 +997,8 @@ export function createHostedRouter(options: HostedOptions = {}) {
     const mapping: Record<string, string | undefined> = {
       anthropic_api_key: body.anthropicApiKey?.trim(), model: body.model, effort: body.effort,
       auto_submit: body.autoSubmit === undefined ? undefined : body.autoSubmit ? "1" : "0",
+      jsearch_api_key: body.jobSearchApiKey?.trim(), adzuna_app_id: body.adzunaAppId?.trim(),
+      adzuna_app_key: body.adzunaAppKey?.trim(),
       imap_host: body.imapHost, imap_port: body.imapPort?.toString(), imap_user: body.imapUser,
       imap_password: body.imapPassword, imap_folder: body.imapFolder,
       daily_target: body.dailyTarget?.toString(), mock_mode: body.mockMode,
@@ -878,6 +1019,11 @@ export function createHostedRouter(options: HostedOptions = {}) {
       hasApiKey: !!(saved || envKey), apiKeySource: saved ? "settings" : envKey ? "env" : "none",
       model: values.get("model") || DEFAULT_MODEL, effort: values.get("effort") || DEFAULT_EFFORT,
       autoSubmit: values.get("auto_submit") === "1", imapHost: values.get("imap_host") || "",
+      jobSearchApiKeyMasked: values.get("jsearch_api_key") ? `••••${values.get("jsearch_api_key")!.slice(-4)}` : "",
+      hasJobSearchApiKey: !!values.get("jsearch_api_key"),
+      adzunaAppId: values.get("adzuna_app_id") || "",
+      adzunaAppKeyMasked: values.get("adzuna_app_key") ? `••••${values.get("adzuna_app_key")!.slice(-4)}` : "",
+      hasAdzunaCredentials: !!(values.get("adzuna_app_id") && values.get("adzuna_app_key")),
       imapPort: Number(values.get("imap_port")) || 993, imapUser: values.get("imap_user") || "",
       imapPasswordSet: !!values.get("imap_password"), imapFolder: values.get("imap_folder") || "INBOX",
       dailyTarget: Number(values.get("daily_target")) || DEFAULT_DAILY_TARGET, mockMode: mode,
@@ -1112,6 +1258,47 @@ export function createHostedRouter(options: HostedOptions = {}) {
       await deleteRows(ctx, "jobs", { id: encodedEq(numberId(row)) });
       throw error;
     }
+  }));
+  router.post("/jobs/discover", asyncHandler(async (req, res) => {
+    const ctx = context(req, res);
+    const body = validate(req.body, z.object({
+      provider: z.enum(["jsearch", "adzuna"]),
+      query: z.string().trim().min(2).max(200),
+      location: z.string().trim().max(120).default("United States"),
+      remoteOnly: z.boolean().default(false),
+      maxResults: z.number().int().min(1).max(20).default(10),
+    }).strict());
+    const settingsRows = await selectRows<Row>(ctx, "settings");
+    const values = new Map(settingsRows.map(row => [String(row.key), String(row.value ?? "")]));
+    const query = body.remoteOnly && body.provider === "adzuna" ? `${body.query} remote` : body.query;
+    const found = await discoverWithProvider(ctx, body.provider, query, body.location, body.remoteOnly, body.maxResults, values);
+    const jobs: Row[] = [];
+    let duplicates = 0;
+    const seen = new Set<string>();
+    for (const candidate of found) {
+      if (!candidate.title || !candidate.url || !candidate.description) continue;
+      const dedupeKey = jobDedupeKey(candidate.company, candidate.title, candidate.description);
+      if (seen.has(dedupeKey) || await one(ctx, "jobs", { dedupe_key: encodedEq(dedupeKey) })) {
+        duplicates += 1;
+        continue;
+      }
+      seen.add(dedupeKey);
+      const ts = now();
+      const inserted = await insertRow<Row>(ctx, "jobs", {
+        source: "url", url: candidate.url, title: candidate.title, company: candidate.company,
+        location: candidate.location, remote_type: "unknown", description_text: candidate.description,
+        ats_vendor: "unknown", posting_id: null, board: candidate.board || body.provider,
+        status: "new", status_reason: null, dedupe_key: dedupeKey, found_at: ts, created_at: ts, updated_at: ts,
+      });
+      jobs.push(inserted);
+    }
+    res.json({
+      provider: body.provider,
+      found: found.length,
+      added: jobs.length,
+      duplicates,
+      jobs: jobs.map(jobView),
+    });
   }));
   router.post("/jobs/bulk", unavailable("Bulk URL importing"));
   router.post("/jobs/run-all", unavailable("Automated job pipeline"));
