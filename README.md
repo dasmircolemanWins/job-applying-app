@@ -164,6 +164,14 @@ aggregates listings from its participating sources; board coverage (which may
 include sites such as Monster, Snagajob, ZipRecruiter, SimplyHired, or LinkedIn)
 depends on the provider's current catalog and terms. ApplyPilot does not scrape
 those sites or bypass their access controls.
+Settings includes shortcuts to open LinkedIn, Handshake, Indeed, SimplyHired,
+Snagajob, Monster, and ZipRecruiter for the user to sign in directly. These are
+browser links only, not connected accounts: ApplyPilot does not receive board
+passwords or read the user's session. The providers do not offer a public
+consumer OAuth/API flow with the job-account scopes needed for this connection;
+JSearch/Adzuna are the supported job-search API integrations. A real account
+connection requires the provider's official OAuth/API program and approved
+scopes.
 Hosted users can add or refresh one public job posting URL at a time; fetching
 is limited to public HTTP(S) pages and rejects private-network destinations.
 Search results are saved to the owner's isolated job pipeline. A user can

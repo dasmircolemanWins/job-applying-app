@@ -26,6 +26,15 @@ const NAV = [
   { to: "/logs", label: "Activity & logs", icon: "≋" },
   { to: "/settings", label: "Settings", icon: "⚙" },
 ];
+const JOB_BOARD_ACCOUNTS = [
+  { name: "LinkedIn", url: "https://www.linkedin.com/login", detail: "Professional network and job listings" },
+  { name: "Handshake", url: "https://joinhandshake.com/", detail: "Early-career and campus opportunities" },
+  { name: "Indeed", url: "https://www.indeed.com/", detail: "Job search and employer listings" },
+  { name: "SimplyHired", url: "https://www.simplyhired.com/", detail: "Job search and salary listings" },
+  { name: "Snagajob", url: "https://www.snagajob.com/", detail: "Hourly and shift-based jobs" },
+  { name: "Monster", url: "https://www.monster.com/", detail: "Job search and career resources" },
+  { name: "ZipRecruiter", url: "https://www.ziprecruiter.com/", detail: "Job search and matching" },
+];
 
 export default function App() {
   return import.meta.env.PROD ? <HostedAuth><WorkspaceApp /></HostedAuth> : <WorkspaceApp />;
@@ -752,6 +761,19 @@ function SettingsPage({ notify }: { notify: (message: string, kind?: ToastMessag
           <Field label="Adzuna application key" hint={settings.hasAdzunaCredentials ? `Saved: ${settings.adzunaAppKeyMasked}` : "Write-only API secret from your Adzuna API account."}><input type="password" autoComplete="new-password" value={adzunaAppKey} onChange={(event) => setAdzunaAppKey(event.target.value)} placeholder={settings.hasAdzunaCredentials ? "Enter a new key to replace" : "Adzuna API key"} /></Field>
         </div>
         <div className="panel-footer"><Button variant="primary" type="submit" disabled={action.busy}>Save provider credentials</Button><span className="muted">The search page can use JSearch or Adzuna once configured.</span></div>
+      </Panel>
+      <Panel title="Job board accounts" subtitle="Open a board to sign in directly. ApplyPilot does not receive or store your board password.">
+        <div className="safety-box board-account-notice">
+          <strong>These are site shortcuts, not linked accounts</strong>
+          <p>These boards do not currently provide ApplyPilot with a public user-authorization connection for personal job data. Signing in on a board keeps your session with that provider; it does not connect the account to ApplyPilot.</p>
+          <small>We only add true account connections through a board’s official OAuth/API program. Use JSearch or Adzuna above for supported job-search integrations.</small>
+        </div>
+        <div className="board-account-grid">
+          {JOB_BOARD_ACCOUNTS.map((board) => <article className="board-account-card" key={board.name}>
+            <div><strong>{board.name}</strong><span>{board.detail}</span><small>Browser sign-in only · not connected</small></div>
+            <a className="button button-secondary" href={board.url} target="_blank" rel="noopener noreferrer">Open site ↗</a>
+          </article>)}
+        </div>
       </Panel>
       <Panel title="Email job alerts" subtitle="Optional read-only IMAP access over TLS. Use an app password; never lower your email account security."><div className="form-grid"><Field label="IMAP host"><input value={settings.imapHost} onChange={(e) => update("imapHost", e.target.value)} placeholder="imap.gmail.com" /></Field><Field label="TLS port"><input type="number" value={settings.imapPort} onChange={(e) => update("imapPort", Number(e.target.value))} /></Field><Field label="Username"><input value={settings.imapUser} onChange={(e) => update("imapUser", e.target.value)} /></Field><Field label="App password" hint={settings.imapPasswordSet ? "A password is already saved" : "Write-only credential"}><input type="password" autoComplete="new-password" value={imapPassword} onChange={(e) => setImapPassword(e.target.value)} placeholder={settings.imapPasswordSet ? "Enter a new password to replace" : "App password"} /></Field><Field label="Folder"><input value={settings.imapFolder} onChange={(e) => update("imapFolder", e.target.value)} /></Field></div><div className="panel-footer"><Button disabled={action.busy} onClick={testEmail}>Test mailbox</Button><span className="muted">Save settings first. Scans only read messages to import job-alert links; they never send email. For Gmail, create an App Password with 2-Step Verification enabled.</span></div></Panel>
       <Panel title="Browser & data" subtitle="External application sites open in your browser; agents do not control login sessions or application forms."><div className="settings-list"><div><span>Chromium available</span><StatusPill value={settings.browserInstalled ? "installed" : "not installed"} /></div><div><span>Local data folder</span><code className="path-code">{settings.dataDir || "Not reported"}</code></div><div><span>Current agent mode</span><StatusPill value={settings.mockActive ? "mock active" : "live"} /></div></div></Panel>
