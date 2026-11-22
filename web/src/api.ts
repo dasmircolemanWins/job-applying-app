@@ -141,6 +141,9 @@ export const api = {
 export const downloadAccountExport = () =>
   download("/account/export", "applypilot-account-export.zip");
 
+export const downloadLedgerCsv = () =>
+  download("/ledger/export", `applypilot-ledger-${new Date().toISOString().slice(0, 10)}.csv`);
+
 export async function download(path: string, filename: string): Promise<void> {
   const headers = new Headers();
   const accessToken = await getAccessToken();

@@ -4,7 +4,7 @@ import { hostedAuthConfigured, supabase } from "./auth";
 import { api, downloadAccountExport } from "./api";
 import "./hosted-auth.css";
 
-export default function HostedAuth() {
+export default function HostedAuth({ children }: { children?: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [checking, setChecking] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -101,14 +101,36 @@ export default function HostedAuth() {
   if (checking) return <HostedShell><p>Checking your session…</p></HostedShell>;
 
   if (session) {
+    if (children) {
+      return (
+        <>
+          {children}
+          <details className="hosted-account-menu">
+            <summary>{session.user.email ?? "Account"}</summary>
+            {error && <p className="hosted-error" role="alert">{error}</p>}
+            {message && <p className="hosted-message" role="status">{message}</p>}
+            <button type="button" className="hosted-account-action" disabled={busy} onClick={() => void exportAccount()}>
+              {busy ? "Please wait…" : "Export account data"}
+            </button>
+            <button type="button" className="hosted-account-action" disabled={busy} onClick={() => void deleteAccount()}>
+              Permanently delete account
+            </button>
+            <button type="button" className="hosted-account-action" disabled={busy} onClick={() => void signOut()}>
+              Sign out
+            </button>
+          </details>
+        </>
+      );
+    }
+
     return <HostedShell>
       <div className="hosted-eyebrow">Signed in</div>
-      <h1>Workspace unavailable</h1>
+      <h1>Hosted workspace</h1>
       <p>Authentication is active for <strong>{session.user.email ?? "your account"}</strong>.</p>
       <div className="hosted-warning">
-        <strong>Hosted workspace features are not enabled.</strong>
-        <p>The database migration and private-storage policies must be installed before account tools work. Existing job, resume, profile, and history APIs remain disabled; no local SQLite data is available to this deployment.</p>
-        <p>Use export before requesting deletion. Deletion requires the server-only Supabase admin key. Do not use this preview as a production multi-user workspace.</p>
+        <strong>Hosted workflow availability</strong>
+        <p>Profile, rules, resume analysis, manual job parsing and qualification, tailored application kits, screening answers, and account export are available. URL/bulk importing, automated job processing, mailbox integration, and API-key testing are not yet available.</p>
+        <p>Account deletion requires a server-only Supabase admin key. Your local SQLite data is never exposed to hosted accounts.</p>
       </div>
       {error && <p className="hosted-error" role="alert">{error}</p>}
       {message && <p className="hosted-message" role="status">{message}</p>}
@@ -125,7 +147,7 @@ export default function HostedAuth() {
   return <HostedShell>
     <div className="hosted-eyebrow">ApplyPilot secure account</div>
     <h1>Sign in</h1>
-    <p>Account creation is disabled until a user-isolated workspace and account deletion flow are ready.</p>
+    <p>Use the account provided by your ApplyPilot administrator. Public account creation is disabled.</p>
     <form className="hosted-form" onSubmit={(event) => void submit(event)}>
       <label>Email
         <input name="email" type="email" autoComplete="email" required />

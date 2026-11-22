@@ -60,8 +60,12 @@ export async function extractDocxText(bytes: Buffer): Promise<string> {
 }
 
 export async function extractResumeText(filename: string, mime: string): Promise<string> {
-  const ext = path.extname(filename).toLowerCase();
   const bytes = await fs.readFile(filename);
+  return extractResumeTextFromBuffer(bytes, path.extname(filename), mime);
+}
+
+export async function extractResumeTextFromBuffer(bytes: Buffer, extension: string, mime: string): Promise<string> {
+  const ext = extension.toLowerCase();
   if (bytes.byteLength > MAX_UPLOAD_BYTES) throw badRequest("Resume exceeds 5 MB");
   let text: string;
   if (ext === ".txt" || mime === "text/plain") text = bytes.toString("utf8");

@@ -99,13 +99,14 @@ sign or upload an iOS release. The native project is packaging scaffolding: do
 not distribute it until the hosted API URL, authenticated multi-user backend,
 privacy policy, and account-deletion flow are configured and tested.
 
-## Render deployment preview
+## Render deployment
 
 `render.yaml` describes one Render web service for the website and API. To
 create it:
 
 1. Create a Supabase project. Turn off public user sign-ups in Supabase Auth;
-   sign-up is intentionally unavailable in this build.
+   sign-up is intentionally unavailable in this build; provision accounts
+   through Supabase Auth.
 2. Apply `supabase/migrations/202610210001_hosted_workspace.sql` to the new
    project's database before deploying. It creates per-user data tables, enables
    and forces row-level security, and provisions a private `user-files` bucket
@@ -125,24 +126,44 @@ service-role key in Render's web-build variables or the iOS app.
 Add the Render HTTPS URL to Supabase Auth's allowed site and redirect URLs.
 The provided CORS allowlist includes Capacitor's iOS origins; if you use a
 custom web domain, add that exact HTTPS origin to `CORS_ALLOWED_ORIGINS` in
-Render. Render's free service may sleep when idle.
+Render. The Render Blueprint uses the free plan; free instances may spin down
+when idle, so the first request after inactivity can take longer.
 
 The migration installs the isolated PostgreSQL schema and private Storage
 policies. The authenticated account export downloads the user's workspace rows
 and private files as a ZIP; account deletion removes that user's private files,
 rows, and Auth identity. These tools depend on the migration being applied,
-valid Supabase configuration, and (for deletion) the server-only service-role
-key. If a prerequisite is missing, the operation fails closed.
+valid Supabase configuration, and (for deletion) the server-only admin key. If
+a prerequisite is missing, the operation fails closed.
 
-**The hosted workspace is still not enabled.** Existing jobs, resumes, profile,
-settings, and application-history routes use synchronous shared SQLite. The
-production server intentionally continues to return `503` for those routes and
-never opens or serves the local `data/` database. The new PostgreSQL schema is
-not yet wired into those feature routes; do not onboard users, advertise this
-deployment as a functioning multi-user workspace, or submit it to the App Store
-until all route/service/file operations use the per-user backend and pass
-isolation tests. Hosted accounts start with fresh data: no local resume or
-history migration/import is provided.
+### Hosted workspace status
+
+Production does not load SQLite. The current Supabase-backed API supports
+account sign-in, profile and rules, stories, settings, resume upload/download
+and deletion, manual job entry/editing, application tracking, blocked/parked
+items, reports, logs, private account export, and account deletion when the
+server-only admin key is configured. Each database request uses the signed-in
+user's token and owner scope, with PostgreSQL row-level security as an
+additional boundary.
+
+The following workflows are **not yet available in hosted mode** and respond
+with an explicit unavailable error: URL/bulk job importing, automated job
+processing, API-key testing, and mailbox integration. Hosted accounts start
+with fresh data; there is no local resume or history migration/import. Resume
+uploads are limited to 10 per account, enforced by both the API and a
+transaction-safe PostgreSQL trigger.
+
+The initial Supabase migration and readiness check have been applied in the
+existing ApplyPilot project. Apply all migrations, including the resume-limit
+migration, before deploying this version; the API fails closed if either
+readiness check fails. The Render service is configured on the free plan, but
+the current hosted implementation must be pushed and deployed before it is
+ready for users. Verify the live health endpoint reports
+`dataApi: supabase-user-isolated`, then complete authenticated workspace and
+account-deletion smoke tests. After HTTPS deployment, users can install the
+web app from iPhone Safari using **Share → Add to Home Screen**. Native iOS
+distribution still requires macOS, Xcode, Apple signing, and App Store Connect
+configuration.
 
 ## Development checks
 

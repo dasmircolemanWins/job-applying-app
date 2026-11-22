@@ -11,7 +11,7 @@ import type {
   ParkedItem, ResumeDocument, ResumeSummary, Rules, Settings, SettingsUpdate,
   StandingFacts, Story,
 } from "../../shared/types";
-import { api, downloadKitDocx, downloadKitPdf } from "./api";
+import { api, downloadKitDocx, downloadKitPdf, downloadLedgerCsv } from "./api";
 import HostedAuth from "./HostedAuth";
 
 type ToastMessage = { id: number; message: string; kind: "success" | "error" | "info" };
@@ -25,7 +25,7 @@ const NAV = [
 ];
 
 export default function App() {
-  return import.meta.env.PROD ? <HostedAuth /> : <WorkspaceApp />;
+  return import.meta.env.PROD ? <HostedAuth><WorkspaceApp /></HostedAuth> : <WorkspaceApp />;
 }
 
 function WorkspaceApp() {
@@ -53,8 +53,8 @@ function WorkspaceApp() {
           {NAV.map((item) => <NavLink key={item.to} end={item.end} to={item.to} className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}><span className="nav-icon">{item.icon}</span>{item.label}</NavLink>)}
         </nav>
         <div className="sidebar-bottom">
-          <div className="privacy-card"><span className="privacy-icon">⌑</span><strong>Local by design</strong><p>Your profile, resumes, and application data stay on this machine.</p></div>
-          <div className="user-chip"><div className="avatar">AP</div><div><strong>Personal workspace</strong><span>Local instance</span></div><span className="online-dot" /></div>
+          <div className="privacy-card"><span className="privacy-icon">⌑</span><strong>{import.meta.env.PROD ? "Private workspace" : "Local by design"}</strong><p>{import.meta.env.PROD ? "Your data is isolated to your signed-in account." : "Your profile, resumes, and application data stay on this machine."}</p></div>
+          <div className="user-chip"><div className="avatar">AP</div><div><strong>{import.meta.env.PROD ? "Hosted workspace" : "Personal workspace"}</strong><span>{import.meta.env.PROD ? "Supabase account" : "Local instance"}</span></div><span className="online-dot" /></div>
         </div>
       </aside>
       <main className="main-area">
@@ -63,6 +63,9 @@ function WorkspaceApp() {
           <div className="topbar-actions"><span className="daily-line"><span className="daily-dot" />{report?.line ?? "Loading daily report…"}</span>{mock && <span className="badge badge-amber">✦ Mock mode</span>}<Link className="avatar top-avatar" to="/settings">AP</Link></div>
         </header>
         <div className="page-content">
+          {import.meta.env.PROD && <div className="hosted-capability-notice" role="status">
+            Hosted mode supports resume analysis, manual job parsing and qualification, tailored application kits, screening answers, and account export. URL/bulk importing, automated job processing, mailbox integration, and API-key testing are not available yet.
+          </div>}
           <Routes>
             <Route path="/" element={<Dashboard notify={notify} />} />
             <Route path="/resumes" element={<ResumesPage notify={notify} />} />
@@ -119,16 +122,24 @@ function Dashboard({ notify }: { notify: (message: string, kind?: ToastMessage["
   const [data, setData] = useState<DashboardData | null>(null);
   const [report, setReport] = useState<{ line: string; submitted: number; total: number } | null>(null);
   const [hasApiKey, setHasApiKey] = useState(false);
+  const [dailyTarget, setDailyTarget] = useState(70);
+  const [profileComplete, setProfileComplete] = useState(false);
+  const [rulesReviewed, setRulesReviewed] = useState(false);
+  const [storiesApproved, setStoriesApproved] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [progress, setProgress] = useState<{ running: boolean; done: number; total: number; current: string; errors: { jobId: number; error: string }[] } | null>(null);
   const action = useAction(notify);
   const load = useCallback(() => {
     setLoading(true); setError("");
-    Promise.all([api.dashboard(), api.report(), api.settings()]).then(([dashboard, daily, settings]) => {
+    Promise.all([api.dashboard(), api.report(), api.settings(), api.profile(), api.rules(), api.stories()]).then(([dashboard, daily, settings, profile, rules, stories]) => {
       setData(dashboard);
       setReport(daily);
       setHasApiKey(settings.hasApiKey);
+      setDailyTarget(settings.dailyTarget);
+      setProfileComplete(Boolean(profile.fullName?.trim() && profile.email?.trim() && profile.workAuthorization?.trim()));
+      setRulesReviewed(Boolean(rules.salary?.floor !== null || rules.roleExclusions?.length || rules.blacklistTitles?.length || rules.excludedCompanies?.length || rules.customRules?.length));
+      setStoriesApproved(stories.some((story) => story.approved));
     }).catch((e: Error) => setError(e.message)).finally(() => setLoading(false));
   }, []);
   useEffect(load, [load]);
@@ -161,7 +172,7 @@ function Dashboard({ notify }: { notify: (message: string, kind?: ToastMessage["
   if (error) return <ErrorState message={error} retry={load} />;
   if (!data) return null;
   const stats = [
-    { label: "Applications today", value: report?.submitted ?? data.today, suffix: `of ${data.today || 0} today`, icon: "↗", color: "green" },
+    { label: "Applications today", value: report?.submitted ?? data.today, suffix: `of ${dailyTarget} daily target`, icon: "↗", color: "green" },
     { label: "All-time applications", value: data.total, suffix: "in your ledger", icon: "▤", color: "blue" },
     { label: "Kits ready", value: data.byStatus.kit_ready ?? 0, suffix: "ready for review", icon: "✧", color: "purple" },
     { label: "Needs attention", value: data.blockedCount + data.parkedCount, suffix: `${data.blockedCount} blocked · ${data.parkedCount} parked`, icon: "◷", color: "amber" },
@@ -170,11 +181,13 @@ function Dashboard({ notify }: { notify: (message: string, kind?: ToastMessage["
   const totalStatus = Math.max(1, statuses.reduce((sum, [, count]) => sum + count, 0));
   const checklist = [
     ["API key configured", hasApiKey, "/settings"], ["Resume uploaded", data.resumesCount > 0, "/resumes"],
-    ["Experience bank built", data.bankBuilt, "/resumes"], ["Profile completed", false, "/profile"],
-    ["Rules reviewed", false, "/profile"], ["Stories approved", false, "/profile"],
+    ["Experience bank built", data.bankBuilt, "/resumes"], ["Profile completed", profileComplete, "/profile"],
+    ["Rules reviewed", rulesReviewed, "/profile"], ["Stories approved", storiesApproved, "/profile"],
   ];
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   return <>
-    <PageHeading eyebrow={new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }).toUpperCase()} title="Good morning" description="Your application workspace at a glance." action={<Button variant="primary" onClick={runAll} disabled={action.busy}>✦ {action.busy ? "Starting…" : "Run all new jobs"}</Button>} />
+    <PageHeading eyebrow={new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }).toUpperCase()} title={greeting} description="Your application workspace at a glance." action={<Button variant="primary" onClick={runAll} disabled={action.busy || (data.byStatus.new ?? 0) === 0}>✦ {action.busy ? "Starting…" : (data.byStatus.new ?? 0) === 0 ? "No new jobs" : "Run all new jobs"}</Button>} />
     {progress && <div className="progress-card"><div><strong>{progress.running ? "Working through your queue" : "Queue complete"}</strong><span>{progress.current || `${progress.done} of ${progress.total} jobs processed`}</span>{progress.errors.length > 0 && <small className="progress-errors">{progress.errors.length} jobs need attention</small>}</div><div className="progress-track"><i style={{ width: `${progress.total ? Math.min(100, (progress.done / progress.total) * 100) : 0}%` }} /></div><span>{progress.done}/{progress.total}</span></div>}
     <div className="stats-grid">{stats.map((stat) => <div className="stat-card" key={stat.label}><div className={`stat-icon stat-${stat.color}`}>{stat.icon}</div><span className="stat-label">{stat.label}</span><strong className="stat-value">{stat.value}</strong><span className="stat-caption">{stat.suffix}</span></div>)}</div>
     <div className="dashboard-grid">
@@ -533,7 +546,7 @@ function LogsPage({ notify }: { notify: (message: string, kind?: ToastMessage["k
   if (loading) return <><PageHeading title="Activity & logs" /><Loading /></>;
   if (error && !ledger) return <><PageHeading title="Activity & logs" /><ErrorState message={error} retry={load} /></>;
   return <>
-    <PageHeading eyebrow="YOUR AUDIT TRAIL" title="Activity & logs" description="A transparent record of applications, blocks, pauses, and agent work." action={<Button onClick={load}>↻ Refresh</Button>} />
+    <PageHeading eyebrow="YOUR AUDIT TRAIL" title="Activity & logs" description="A transparent record of applications, blocks, pauses, and agent work." action={<><Button onClick={() => void downloadLedgerCsv().catch((e: Error) => notify(e.message, "error"))} disabled={!ledger?.items.length}>⇩ Export ledger CSV</Button><Button onClick={load}>↻ Refresh</Button></>} />
     {error && <div className="inline-error">{error}</div>}
     <div className="tabs"><button className={tab === "ledger" ? "tab active" : "tab"} onClick={() => setTab("ledger")}>Application ledger <span>{ledger?.total ?? 0}</span></button><button className={tab === "blocked" ? "tab active" : "tab"} onClick={() => setTab("blocked")}>Blocked <span>{blocked?.length ?? 0}</span></button><button className={tab === "parked" ? "tab active" : "tab"} onClick={() => setTab("parked")}>Parked <span>{parked?.length ?? 0}</span></button><button className={tab === "runs" ? "tab active" : "tab"} onClick={() => setTab("runs")}>Agent runs <span>{runs?.length ?? 0}</span></button></div>
     <Panel title={tab === "ledger" ? "Genuine applications" : tab === "blocked" ? "Blocked for human action" : tab === "parked" ? "Parked for later" : "Agent run history"} subtitle={tab === "ledger" ? "Only confirmed submissions belong in this ledger." : "Entries are retained until you resolve them."}>

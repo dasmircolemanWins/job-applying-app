@@ -8,6 +8,7 @@ declare global {
   namespace Express {
     interface Locals {
       supabaseUser?: SupabaseUser;
+      supabaseAccessToken?: string;
     }
   }
 }
@@ -223,14 +224,13 @@ export function createSupabaseAuthMiddleware(options: AuthMiddlewareOptions = {}
       return;
     }
     res.locals.supabaseUser = user;
+    res.locals.supabaseAccessToken = token;
     next();
   };
 }
 
 export const MULTI_USER_BACKEND_UNAVAILABLE =
-  "Production data access is disabled: this deployment still uses the local SQLite data layer. " +
-  "PostgreSQL user isolation and private Supabase Storage have not been implemented. No local data is exposed. " +
-  "Before enabling APIs, migrate every repository to per-user PostgreSQL/RLS and private storage, and configure Supabase Auth.";
+  "This hosted API endpoint is not implemented. Its data workflow is unavailable in hosted mode. No local data is exposed from SQLite to any account.";
 
 export function productionDataUnavailable(): RequestHandler {
   return (_req, res) => {

@@ -15,6 +15,27 @@ router.get("/ledger", asyncHandler((req, res) => {
   const rows = all<Record<string, unknown>>("SELECT * FROM applications ORDER BY submitted_at DESC,id DESC LIMIT ? OFFSET ?", q.limit, q.offset);
   res.json({ items: rows.map(r => dbApplication(r)!), total });
 }));
+
+function csvCell(value: unknown): string {
+  let text = value == null ? "" : String(value);
+  if (/^[=+\-@]/.test(text)) text = `'${text}`;
+  return `"${text.replaceAll("\"", "\"\"")}"`;
+}
+
+router.get("/ledger/export", (_req, res) => {
+  const rows = all<Record<string, unknown>>(
+    "SELECT a.*, j.url FROM applications a LEFT JOIN jobs j ON j.id=a.job_id ORDER BY a.submitted_at DESC,a.id DESC",
+  );
+  const headers = ["submitted_at", "company", "title", "posting_id", "route", "resume_file", "notes", "job_url"];
+  const csv = [
+    headers.join(","),
+    ...rows.map((row) => headers.map((header) => csvCell(row[header])).join(",")),
+  ].join("\r\n");
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", "attachment; filename=applypilot-ledger.csv");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.send(`\ufeff${csv}`);
+});
 router.get("/blocked", (_req, res) => {
   const rows = all<Record<string, unknown>>(`SELECT b.*,j.company,j.title FROM blocked_items b JOIN jobs j ON j.id=b.job_id ORDER BY b.resolved,b.created_at DESC`);
   res.json(rows.map(dbBlocked));

@@ -137,11 +137,18 @@ async function readRows(
   base: string,
   anonKey: string,
   token: string,
+  userId: string,
   table: string,
 ): Promise<unknown[]> {
   const rows: unknown[] = [];
   for (let offset = 0; ; offset += 1_000) {
-    const response = await checkedFetch(fetcher, `${base}/rest/v1/${table}?select=*&limit=1000&offset=${offset}`, {
+    const query = new URLSearchParams({
+      select: "*",
+      owner_id: `eq.${userId}`,
+      limit: "1000",
+      offset: String(offset),
+    });
+    const response = await checkedFetch(fetcher, `${base}/rest/v1/${table}?${query}`, {
       headers: { apikey: anonKey, authorization: `Bearer ${token}` },
     });
     const page: unknown = await response.json();
@@ -167,7 +174,7 @@ export function createAccountRouter(options: AccountRouteOptions = {}) {
       const zip = new JSZip();
       const workspace: Record<string, unknown[]> = {};
       for (const table of DATA_TABLES) {
-        workspace[table] = await readRows(fetcher, config.url, config.anonKey, token, table);
+        workspace[table] = await readRows(fetcher, config.url, config.anonKey, token, userId, table);
       }
       zip.file("workspace.json", JSON.stringify({
         exportedAt: new Date().toISOString(),
@@ -199,6 +206,7 @@ export function createAccountRouter(options: AccountRouteOptions = {}) {
   });
 
   router.delete("/account", async (req, res, next) => {
+    let deletionStarted = false;
     try {
       const serviceKey = env.SUPABASE_SERVICE_ROLE_KEY?.trim();
       if (!serviceKey) {
@@ -210,6 +218,7 @@ export function createAccountRouter(options: AccountRouteOptions = {}) {
       const files = await listUserFiles(fetcher, config.url, config.anonKey, token, userId);
 
       for (let index = 0; index < files.length; index += 100) {
+        deletionStarted = true;
         await checkedFetch(fetcher, `${config.url}/storage/v1/object/${BUCKET}`, {
           method: "DELETE",
           headers: {
@@ -221,6 +230,7 @@ export function createAccountRouter(options: AccountRouteOptions = {}) {
         });
       }
       for (const table of DELETE_ORDER) {
+        deletionStarted = true;
         await checkedFetch(
           fetcher,
           `${config.url}/rest/v1/${table}?owner_id=eq.${encodeURIComponent(userId)}`,
@@ -240,7 +250,9 @@ export function createAccountRouter(options: AccountRouteOptions = {}) {
       });
       res.status(200).json({ deleted: true });
     } catch (error) {
-      next(error);
+      next(deletionStarted
+        ? new HttpError(503, "Account deletion did not finish. Some data may already be deleted; retry to continue.")
+        : error);
     }
   });
 

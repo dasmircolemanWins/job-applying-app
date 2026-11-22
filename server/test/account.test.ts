@@ -81,6 +81,8 @@ test("account export includes user-isolated rows and private files in a no-store
   });
 
   assert.ok(requests.some(({ url }) => url.includes(`/rest/v1/jobs?`)));
+  assert.ok(requests.filter(({ url }) => url.includes("/rest/v1/") && !url.includes("/rpc/"))
+    .every(({ url }) => new URL(url).searchParams.get("owner_id") === `eq.${userId}`));
   assert.ok(requests.some(({ url }) => url.endsWith("/rest/v1/rpc/applypilot_workspace_ready")));
   assert.ok(requests.some(({ url }) =>
     url.endsWith(`${userId}/resumes/source.txt`) &&
@@ -148,4 +150,27 @@ test("account deletion does not mutate data when hosted isolation readiness is f
     assert.equal(response.status, 503);
   });
   assert.deepEqual(calls, ["https://example.supabase.co/rest/v1/rpc/applypilot_workspace_ready"]);
+});
+
+test("account deletion explains that partial cleanup can be retried", async () => {
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/rest/v1/rpc/applypilot_workspace_ready")) return new Response("true", { status: 200 });
+    if (url.endsWith("/storage/v1/object/list/user-files")) {
+      const body = JSON.parse(String(init?.body)) as { prefix: string };
+      return new Response(JSON.stringify(listReply(body.prefix)), { status: 200 });
+    }
+    if (url.endsWith("/storage/v1/object/user-files") && init?.method === "DELETE") {
+      return new Response("storage unavailable", { status: 503 });
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  };
+  const env = { ...baseEnv, SUPABASE_SERVICE_ROLE_KEY: "server-only-admin-key" };
+
+  await withAccountServer(fetcher, env, async base => {
+    const response = await fetch(`${base}/account`, { method: "DELETE", headers: { authorization: "Bearer account-test-token" } });
+    const body = await response.text();
+    assert.equal(response.status, 503, body);
+    assert.match(body, /retry to continue/);
+  });
 });

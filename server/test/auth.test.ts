@@ -133,7 +133,7 @@ test("auth middleware attaches only the verified Supabase user ID", async () => 
   assert.deepEqual(harness.state.locals.supabaseUser, { id: userId });
 });
 
-test("authenticated production requests still fail closed until user-isolated storage exists", async () => {
+test("unimplemented hosted API endpoints fail closed without local data access", async () => {
   const harness = responseHarness();
   productionDataUnavailable()(requestHarness(), harness.response, () => undefined);
   assert.equal(harness.state.status, 503);

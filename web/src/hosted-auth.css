@@ -17,3 +17,11 @@
 .hosted-warning p { margin-bottom: 0; font-size: 12px; }
 .hosted-error { color: #ff9292 !important; font-size: 12px !important; }
 .hosted-message { color: var(--green) !important; font-size: 12px !important; }
+.hosted-account-menu { position: fixed; top: 12px; right: 12px; z-index: 20; }
+.hosted-account-menu summary { max-width: min(280px, calc(100vw - 24px)); overflow: hidden; padding: 9px 12px; color: var(--text); border: 1px solid var(--border-light); border-radius: 8px; background: var(--panel); cursor: pointer; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.hosted-account-menu[open] { width: min(280px, calc(100vw - 24px)); padding: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); box-shadow: 0 16px 40px #03081499; }
+.hosted-account-menu[open] summary { max-width: 100%; }
+.hosted-account-menu p { margin: 8px 4px; }
+.hosted-account-action { display: block; width: 100%; padding: 10px; color: var(--text); border: 0; border-radius: 6px; background: transparent; cursor: pointer; font-size: 12px; text-align: left; }
+.hosted-account-action:hover { background: #ffffff0d; }
+.hosted-account-action:disabled { opacity: .55; cursor: wait; }
