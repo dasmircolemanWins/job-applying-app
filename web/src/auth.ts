@@ -3,6 +3,10 @@
 import { createClient } from "@supabase/supabase-js";
 
 export const INVALID_SESSION_EVENT = "applypilot:invalid-session";
+export const isPasswordRecoveryRedirect = typeof window !== "undefined" && (
+  new URLSearchParams(window.location.search).get("type") === "recovery" ||
+  new URLSearchParams(window.location.hash.slice(1)).get("type") === "recovery"
+);
 
 const rawSupabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();

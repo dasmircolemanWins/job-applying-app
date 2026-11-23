@@ -126,7 +126,10 @@ create it:
    enabled. It is a server-only secret used solely to remove the Auth identity;
    never set it as a `VITE_` value, in the iOS app, or in source control.
 5. After Render assigns a URL, add it as the Supabase Auth site URL and allowed
-   redirect URL.
+   redirect URL. Password recovery uses Supabase's email recovery flow and
+   redirects to the site root with `?type=recovery`; ensure both the site root
+   and that recovery URL are allowed under **Authentication → URL Configuration
+   → Redirect URLs**, and configure Supabase email delivery.
 
 Use only the Supabase public anon key in the web build. Never put a Supabase
 service-role key in Render's web-build variables or the iOS app.

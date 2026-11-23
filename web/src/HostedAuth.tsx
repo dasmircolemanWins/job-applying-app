@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { hostedAuthConfigured, INVALID_SESSION_EVENT, supabase } from "./auth";
+import { hostedAuthConfigured, INVALID_SESSION_EVENT, isPasswordRecoveryRedirect, supabase } from "./auth";
 import { api, downloadAccountExport } from "./api";
 import "./hosted-auth.css";
 
@@ -10,7 +10,9 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [mode, setMode] = useState<"signin" | "signup" | "forgot">("signin");
+  const [recoveryMode, setRecoveryMode] = useState(isPasswordRecoveryRedirect);
+  const [recoveryComplete, setRecoveryComplete] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deletePhrase, setDeletePhrase] = useState("");
 
@@ -27,8 +29,13 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
       if (sessionError) setError(sessionError.message);
       setChecking(false);
     });
-    const { data: { subscription } } = client.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: { subscription } } = client.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession);
+      if (event === "PASSWORD_RECOVERY") setRecoveryMode(true);
+      if (event === "SIGNED_OUT") {
+        setRecoveryMode(false);
+        setRecoveryComplete(false);
+      }
     });
     const handleInvalidSession = () => {
       setError("Your saved session is no longer valid. Sign in again to continue.");
@@ -65,6 +72,16 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
     setError("");
     setMessage("");
     try {
+      if (mode === "forgot") {
+        const redirectTo = new URL("/", window.location.origin);
+        redirectTo.searchParams.set("type", "recovery");
+        const { error: authError } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: redirectTo.toString(),
+        });
+        if (authError) throw authError;
+        setMessage("If an account exists for that email, we'll send a password reset link.");
+        return;
+      }
       const { data, error: authError } = mode === "signup"
         ? await supabase.auth.signUp({
           email,
@@ -91,6 +108,33 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Authentication failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updatePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase) return;
+    const form = new FormData(event.currentTarget);
+    const password = String(form.get("password") ?? "");
+    const confirmPassword = String(form.get("confirmPassword") ?? "");
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.");
+      setMessage("");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const { error: authError } = await supabase.auth.updateUser({ password });
+      if (authError) throw authError;
+      setRecoveryMode(false);
+      setRecoveryComplete(true);
+      window.history.replaceState(null, document.title, "/");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Password reset failed. Request a new reset link and try again.");
     } finally {
       setBusy(false);
     }
@@ -151,6 +195,50 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
   }
 
   if (checking) return <HostedShell><p>Checking your session…</p></HostedShell>;
+
+  if (recoveryMode && !session) {
+    return <HostedShell>
+      <div className="hosted-eyebrow">Account recovery</div>
+      <h1>Reset link unavailable</h1>
+      <p>This reset link may have expired or already been used. Request a new link to continue.</p>
+      <button className="hosted-button" type="button" onClick={() => {
+        setRecoveryMode(false);
+        setMode("forgot");
+        setError("");
+        window.history.replaceState(null, document.title, "/");
+      }}>Request a new reset link</button>
+    </HostedShell>;
+  }
+
+  if (recoveryComplete) {
+    return <HostedShell>
+      <div className="hosted-eyebrow">Account recovery</div>
+      <h1>Password updated</h1>
+      <p className="hosted-message" role="status">Your password has been changed successfully.</p>
+      <button className="hosted-button" type="button" onClick={() => setRecoveryComplete(false)}>Continue to ApplyPilot</button>
+    </HostedShell>;
+  }
+
+  if (recoveryMode) {
+    return <HostedShell>
+      <div className="hosted-eyebrow">Account recovery</div>
+      <h1>Choose a new password</h1>
+      <p>Use a new password with at least 8 characters. If this reset link has expired, request another from the sign-in page.</p>
+      <form className="hosted-form" onSubmit={(event) => void updatePassword(event)}>
+        <label>New password
+          <input name="password" type="password" autoComplete="new-password" minLength={8} maxLength={128} required />
+        </label>
+        <label>Confirm new password
+          <input name="confirmPassword" type="password" autoComplete="new-password" minLength={8} maxLength={128} required />
+        </label>
+        {error && <p className="hosted-error" role="alert">{error}</p>}
+        {message && <p className="hosted-message" role="status">{message}</p>}
+        <button className="hosted-button" type="submit" disabled={busy}>
+          {busy ? "Updating password…" : "Update password"}
+        </button>
+      </form>
+    </HostedShell>;
+  }
 
   if (session) {
     if (children) {
@@ -218,8 +306,8 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
 
   return <HostedShell>
     <div className="hosted-eyebrow">ApplyPilot secure account</div>
-    <h1>{mode === "signup" ? "Create your account" : "Welcome back"}</h1>
-    <p>{mode === "signup" ? "Set up your private ApplyPilot workspace." : "Sign in to your private ApplyPilot workspace."}</p>
+    <h1>{mode === "signup" ? "Create your account" : mode === "forgot" ? "Reset your password" : "Welcome back"}</h1>
+    <p>{mode === "signup" ? "Set up your private ApplyPilot workspace." : mode === "forgot" ? "Enter the email address for your account and we’ll send a reset link." : "Sign in to your private ApplyPilot workspace."}</p>
     <form className="hosted-form" onSubmit={(event) => void submit(event)}>
       {mode === "signup" && <>
         <fieldset className="hosted-fieldset">
@@ -257,24 +345,36 @@ export default function HostedAuth({ children }: { children?: ReactNode }) {
       <label>Email
         <input name="email" type="email" autoComplete="email" maxLength={254} required />
       </label>
-      <label>Password
+      {mode !== "forgot" && <label>Password
         <input name="password" type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} minLength={8} maxLength={128} required />
-      </label>
+      </label>}
       {error && <p className="hosted-error" role="alert">{error}</p>}
       {message && <p className="hosted-message" role="status">{message}</p>}
       <button className="hosted-button" type="submit" disabled={busy}>
-        {busy ? "Please wait…" : mode === "signup" ? "Create your account" : "Sign in"}
+        {busy ? "Please wait…" : mode === "signup" ? "Create your account" : mode === "forgot" ? "Send reset link" : "Sign in"}
       </button>
     </form>
-    <button className="hosted-link" type="button" onClick={() => {
-      setMode(mode === "signin" ? "signup" : "signin");
+    {mode === "signin" && <button className="hosted-link" type="button" onClick={() => {
+      setMode("forgot");
+      setError("");
+      setMessage("");
+    }}>Forgot password?</button>}
+    {mode !== "forgot" && <button className="hosted-link" type="button" onClick={() => {
+      setMode(mode === "signup" ? "signin" : "signup");
       setError("");
       setMessage("");
     }}>
-      {mode === "signin" ? "New to ApplyPilot? Create your account" : "Already have an account? Sign in"}
-    </button>
+      {mode === "signup" ? "Already have an account? Sign in" : "New to ApplyPilot? Create your account"}
+    </button>}
+    {mode === "forgot" && <button className="hosted-link" type="button" onClick={() => {
+      setMode("signin");
+      setError("");
+      setMessage("");
+    }}>Back to sign in</button>}
     <p className="hosted-note">{mode === "signup"
       ? "We store your account details securely with your private account. Email verification is required before sign-in."
+      : mode === "forgot"
+        ? "For your privacy, the same confirmation is shown whether or not an account uses that email."
       : "Each account gets a private, user-isolated workspace."}</p>
   </HostedShell>;
 }
